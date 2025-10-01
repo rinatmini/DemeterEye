@@ -750,7 +750,7 @@ def fetch_weather_history(lat: float, lon: float, start_date: datetime, end_date
         "longitude": lon,
         "start_date": start_str,
         "end_date": end_str,
-        "hourly": "temperature_2m,relative_humidity_2m,cloudcover",
+        "hourly": "temperature_2m,relative_humidity_2m,cloudcover,windspeed_10m",
         "timezone": "auto",
     }
     try:
@@ -771,9 +771,13 @@ def fetch_weather_history(lat: float, lon: float, start_date: datetime, end_date
     temps = hourly.get("temperature_2m")
     humidity = hourly.get("relative_humidity_2m")
     cloudcover = hourly.get("cloudcover")
+    windspeed = hourly.get("windspeed_10m")
     if not times or not temps or not humidity or not cloudcover:
         logger.warning("Incomplete weather data returned for lat=%s lon=%s", lat, lon)
         return pd.DataFrame()
+    if not windspeed:
+        logger.warning("Wind speed missing for lat=%s lon=%s; substituting zeros", lat, lon)
+        windspeed = [0.0] * len(times)
 
     weather_df = pd.DataFrame(
         {
@@ -781,6 +785,7 @@ def fetch_weather_history(lat: float, lon: float, start_date: datetime, end_date
             "temperature_c": pd.to_numeric(temps, errors="coerce"),
             "humidity_pct": pd.to_numeric(humidity, errors="coerce"),
             "cloudcover_pct": pd.to_numeric(cloudcover, errors="coerce"),
+            "wind_speed": pd.to_numeric(windspeed, errors="coerce"),
         }
     ).dropna()
 
@@ -799,6 +804,7 @@ def fetch_weather_history(lat: float, lon: float, start_date: datetime, end_date
         "temperature_c": "temperature_mean",
         "humidity_pct": "humidity_mean",
         "cloudcover_pct": "cloudcover_mean",
+        "wind_speed": "wind_speed_mean",
     }, inplace=True)
     daily["clarity_index"] = 100.0 - daily["cloudcover_mean"].clip(lower=0, upper=100)
     return daily
@@ -853,6 +859,7 @@ if search_button:
 
 
 
+
             with tab1:
                 st.subheader("NDVI time series")
 
@@ -866,7 +873,6 @@ if search_button:
                     max_workers = min(8, len(row_tuples))
                     try:
                         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                            chunk = max(1, len(row_tuples) // (max_workers * 4))
                             future_to_index = {executor.submit(worker, row): idx for idx, row in enumerate(row_tuples)}
                             completed = 0
                             for future in concurrent.futures.as_completed(future_to_index):
@@ -874,11 +880,10 @@ if search_button:
                                 completed += 1
                                 try:
                                     result = future.result()
-                                except Exception:
-                                    logger.exception("NDVI worker failed for index %s", idx)
-                                else:
                                     if result:
                                         results.append(result)
+                                except Exception:
+                                    logger.exception("NDVI worker failed for index %s", idx)
                                 status_text.text(
                                     f"Processing {completed}/{len(row_tuples)}: {df.iloc[idx]['datetime'].strftime('%Y-%m-%d')}"
                                 )
@@ -943,6 +948,7 @@ if search_button:
                                 y=weather_df['clarity_index'],
                                 name="Clarity index (%)",
                                 line=dict(color="#1b9e77"),
+                                visible='legendonly'
                             ),
                             secondary_y=True,
                         )
@@ -961,6 +967,16 @@ if search_button:
                                 y=weather_df['temperature_mean'],
                                 name="Temperature (deg C)",
                                 line=dict(color="#7570b3", dash="dot"),
+                            ),
+                            secondary_y=True,
+                        )
+                        fig.add_trace(
+                            go.Scatter(
+                                x=weather_df['date'],
+                                y=weather_df['wind_speed_mean'],
+                                name="Wind speed (m/s)",
+                                line=dict(color="#66a61e", dash="dashdot"),
+                                visible='legendonly'
                             ),
                             secondary_y=True,
                         )
@@ -988,6 +1004,9 @@ if search_button:
                         st.metric("Min NDVI", f"{ndvi_df['ndvi'].min():.3f}")
                     with col4:
                         st.metric("Std. dev.", f"{ndvi_df['ndvi'].std():.3f}")
+
+                    if ndvi_df['ndvi'].min() < 0:
+                        st.info("Negative NDVI values typically indicate open water, clouds, or other non-vegetation surfaces within the AOI.")
 
                     mean_ndvi = ndvi_df['ndvi'].mean()
                     if mean_ndvi < 0.2:
