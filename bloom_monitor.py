@@ -1105,13 +1105,44 @@ if search_button:
                 st.dataframe(display_df, use_container_width=True)
 
                 # Export button
-                csv = display_df.to_csv(index=False)
+                csv_table = display_df.to_csv(index=False)
                 st.download_button(
-                    label="Download as CSV",
-                    data=csv,
-                    file_name=f"hls_data_{start_dt.date()}_{end_dt.date()}.csv",
+                    label="Download table as CSV",
+                    data=csv_table,
+                    file_name=f"hls_table_{start_dt.date()}_{end_dt.date()}.csv",
                     mime="text/csv",
                 )
+
+                if results:
+                    weather_export = weather_df.copy() if not weather_df.empty else pd.DataFrame()
+                    export_df = pd.DataFrame(results).sort_values('date')
+                    if not weather_export.empty:
+                        # Normalize dates to timezone-naive and date-only for proper matching
+                        export_df['date_normalized'] = pd.to_datetime(export_df['date']).dt.tz_localize(None).dt.date
+                        weather_export['date_normalized'] = pd.to_datetime(weather_export['date']).dt.date
+                        
+                        weather_export = weather_export.rename(columns={
+                            'temperature_mean': 'temperature_deg_c',
+                            'humidity_mean': 'humidity_pct',
+                            'cloudcover_mean': 'cloudcover_pct',
+                            'wind_speed_mean': 'wind_speed_mps',
+                            'clarity_index': 'clarity_pct',
+                        })
+                        
+                        export_df = export_df.merge(
+                            weather_export.drop(columns=['date']), 
+                            left_on='date_normalized', 
+                            right_on='date_normalized', 
+                            how='left'
+                        )
+                        export_df = export_df.drop(columns=['date_normalized'])
+                    csv_results = export_df.to_csv(index=False)
+                    st.download_button(
+                        label="Download NDVI + weather (CSV)",
+                        data=csv_results,
+                        file_name=f"hls_ndvi_weather_{start_dt.date()}_{end_dt.date()}.csv",
+                        mime="text/csv",
+                    )
 else:
     # First-run instructions
     st.info("""
