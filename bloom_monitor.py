@@ -11,6 +11,8 @@ try:
 except ImportError:
     AWSSession = None  # type: ignore
 from shapely.geometry import shape
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 from pathlib import Path
 import hashlib
 import json
@@ -37,6 +39,22 @@ DEFAULT_MAX_LON = DEFAULT_CENTER_LON + DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_MIN_LAT = DEFAULT_CENTER_LAT - DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_MAX_LAT = DEFAULT_CENTER_LAT + DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_RADIUS_KM = 6.0
+
+GEOJSON_DIR = Path("geojsons")
+
+
+def list_geojson_files(directory: Path) -> List[Path]:
+    if not directory.exists():
+        return []
+    candidates: List[Path] = []
+    for pattern in ("*.geojson", "*.GeoJSON", "*.json", "*.JSON"):
+        candidates.extend(directory.glob(pattern))
+    unique = {}
+    for file_path in candidates:
+        unique[file_path.name] = file_path
+    return sorted(unique.values(), key=lambda f: f.name.lower())
+
+
 
 
 CACHE_ROOT = Path(".cache")
@@ -219,9 +237,11 @@ with st.sidebar:
     # Area of interest coordinates
     st.subheader("Area of interest (AOI)")
 
+    geojson_files = list_geojson_files(GEOJSON_DIR)
     input_method = st.radio(
         "Input method",
-        ["Corner coordinates", "Center + radius", "GeoJSON"]
+        ["Corner coordinates", "Center + radius", "GeoJSON"],
+        index=2 if geojson_files else 0
     )
 
 
@@ -262,11 +282,36 @@ with st.sidebar:
             st.error(bbox_error)
 
     else:  # GeoJSON
+        selected_geojson_path: Optional[Path] = None
+        selected_geojson_text = ""
+        if geojson_files:
+            geojson_display_names = [path.name for path in geojson_files]
+            selected_geojson_name = st.selectbox(
+                "GeoJSON file",
+                geojson_display_names,
+                index=0,
+                help="Files discovered in the geojsons directory"
+            )
+            selected_geojson_path = next(
+                (candidate for candidate in geojson_files if candidate.name == selected_geojson_name),
+                None
+            )
+            if selected_geojson_path is not None:
+                try:
+                    selected_geojson_text = selected_geojson_path.read_text(encoding="utf-8")
+                except Exception as exc:
+                    st.error(f"Failed to read {selected_geojson_path.name}: {exc}")
+                    selected_geojson_text = ""
+        else:
+            st.info("No GeoJSON files found. Add files to the geojsons directory or paste one below.")
         geojson_input = st.text_area(
             "Paste a GeoJSON polygon",
+            value=selected_geojson_text,
             height=150,
             help="Polygon geometry or Feature with Polygon geometry"
         )
+        if selected_geojson_path is not None:
+            st.caption(f"Loaded from `geojsons/{selected_geojson_path.name}`")
         if geojson_input:
             try:
                 geojson_data = json.loads(geojson_input)
