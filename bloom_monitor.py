@@ -12,11 +12,13 @@ except ImportError:
     AWSSession = None  # type: ignore
 from shapely.geometry import shape
 from pathlib import Path
+import hashlib
 import json
 import logging
 import math
 import os
-from typing import List, Tuple
+import time
+from typing import List, Tuple, Optional
 import warnings
 warnings.filterwarnings("ignore")
 # Configure logger
@@ -35,6 +37,119 @@ DEFAULT_MAX_LON = DEFAULT_CENTER_LON + DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_MIN_LAT = DEFAULT_CENTER_LAT - DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_MAX_LAT = DEFAULT_CENTER_LAT + DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_RADIUS_KM = 6.0
+
+
+CACHE_ROOT = Path(".cache")
+NDVI_CACHE_DIR = CACHE_ROOT / "ndvi"
+NDVI_CACHE_VERSION = "1"
+
+
+def get_ndvi_cache_path(red_url: str, nir_url: str, bbox: List[float]) -> Path:
+    payload = json.dumps(
+        {
+            "red": red_url,
+            "nir": nir_url,
+            "bbox": [round(float(coord), 6) for coord in bbox],
+            "version": NDVI_CACHE_VERSION
+        },
+        sort_keys=True
+    )
+    cache_dir = NDVI_CACHE_DIR
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return cache_dir / f"{key}.npz"
+
+
+STAC_CACHE_DIR = CACHE_ROOT / "stac"
+STAC_CACHE_VERSION = "1"
+STAC_CACHE_TTL_SECONDS = 3600
+
+
+def get_stac_cache_path(bbox: List[float], start: str, end: str, max_cc: int,
+                        dataset_type: str, token: str) -> Path:
+    payload = {
+        "bbox": [round(float(coord), 6) for coord in bbox],
+        "start": start,
+        "end": end,
+        "max_cc": int(max_cc),
+        "dataset": dataset_type,
+        "token": hashlib.sha256(token.encode("utf-8")).hexdigest() if token else "",
+        "version": STAC_CACHE_VERSION
+    }
+    cache_dir = STAC_CACHE_DIR
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    return cache_dir / f"{key}.json"
+
+
+def load_stac_cache(cache_path: Path) -> Optional[pd.DataFrame]:
+    if not cache_path.exists():
+        return None
+    try:
+        if STAC_CACHE_TTL_SECONDS > 0:
+            age = time.time() - cache_path.stat().st_mtime
+            if age > STAC_CACHE_TTL_SECONDS:
+                try:
+                    cache_path.unlink()
+                except FileNotFoundError:
+                    pass
+                return None
+    except OSError:
+        logger.exception("Failed to inspect STAC cache at %s", cache_path)
+        return None
+
+    try:
+        raw = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception("Failed to read STAC cache from %s", cache_path)
+        try:
+            cache_path.unlink()
+        except FileNotFoundError:
+            pass
+        return None
+
+    records = raw.get("records", [])
+    if not records:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(records)
+    if "datetime" in df.columns:
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df = df.sort_values("datetime")
+    return df
+
+
+def store_stac_cache(cache_path: Path, records: List[dict]) -> None:
+    try:
+        serialisable: List[dict] = []
+        for record in records:
+            cloud_cover = record.get("cloud_cover")
+            if cloud_cover is not None:
+                try:
+                    cloud_cover = float(cloud_cover)
+                except (TypeError, ValueError):
+                    cloud_cover = None
+
+            dt_value = record.get("datetime")
+            if isinstance(dt_value, (datetime, pd.Timestamp)):
+                dt_serialised = dt_value.isoformat()
+            elif dt_value is not None:
+                dt_serialised = str(dt_value)
+            else:
+                dt_serialised = None
+
+            serialisable.append({
+                "id": record.get("id"),
+                "datetime": dt_serialised,
+                "cloud_cover": cloud_cover,
+                "collection": record.get("collection"),
+                "nir_url": record.get("nir_url"),
+                "red_url": record.get("red_url")
+            })
+
+        cache_path.write_text(json.dumps({"records": serialisable}), encoding="utf-8")
+    except Exception:
+        logger.exception("Failed to persist STAC cache at %s", cache_path)
 
 def load_token_from_env() -> str:
     token = os.getenv("EARTHDATA_BEARER_TOKEN")
@@ -225,6 +340,12 @@ def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
     logger.info("search_hls_data: bbox=%s start=%s end=%s max_cc=%s dataset=%s token_provided=%s", bbox, start, end, max_cc, dataset_type, bool(_token))
     bbox = normalize_bbox(bbox)
 
+    cache_path = get_stac_cache_path(bbox, start, end, max_cc, dataset_type, _token)
+    cached_df = load_stac_cache(cache_path)
+    if cached_df is not None:
+        logger.debug("search_hls_data: returning %s cached items from %s", len(cached_df), cache_path.name)
+        return cached_df
+
     try:
         # Connect to LP DAAC STAC
         catalog = Client.open(
@@ -277,11 +398,10 @@ def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
             records.append({
                 "id": item.id,
                 "datetime": pd.to_datetime(props['datetime']),
-                "cloud_cover": cloud_cover,
+                "cloud_cover": float(cloud_cover),
                 "collection": item.collection_id,
                 "nir_url": nir_url,
-                "red_url": red_url,
-                "item": item
+                "red_url": red_url
             })
             logger.debug("Kept item %s (collection=%s)", item.id, item.collection_id)
 
@@ -289,6 +409,8 @@ def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
         logger.info("search_hls_data: %s items after filtering", len(df))
         if not df.empty:
             df = df.sort_values("datetime")
+        store_stac_cache(cache_path, records)
+        logger.debug("search_hls_data: cached %s items at %s", len(df), cache_path.name)
         return df
 
     except Exception as e:
@@ -301,7 +423,38 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
                              token: str) -> Tuple[np.ndarray, float]:
     """Compute NDVI from two COG asset URLs"""
 
-    logger.info("calculate_ndvi_from_urls: red_url=%s nir_url=%s bbox=%s token_provided=%s", red_url, nir_url, bbox, bool(token))
+    logger.info(
+        "calculate_ndvi_from_urls: red_url=%s nir_url=%s bbox=%s token_provided=%s",
+        red_url,
+        nir_url,
+        bbox,
+        bool(token)
+    )
+
+    try:
+        bbox = normalize_bbox(bbox)
+    except ValueError:
+        logger.exception("NDVI calculation received invalid bbox")
+        st.warning("NDVI calculation error: invalid bounding box")
+        return None, None
+
+    cache_path = get_ndvi_cache_path(red_url, nir_url, bbox)
+
+    if cache_path.exists():
+        try:
+            with np.load(cache_path, allow_pickle=False) as cached:
+                ndvi_data = cached["ndvi"]
+                mask = cached["mask"]
+                mean_ndvi = float(cached["mean"].item())
+            ndvi = np.ma.array(ndvi_data, mask=mask)
+            logger.debug("Loaded NDVI from cache for %s", cache_path.name)
+            return ndvi, mean_ndvi
+        except Exception:
+            logger.exception("Failed to load NDVI cache from %s", cache_path)
+            try:
+                cache_path.unlink()
+            except FileNotFoundError:
+                pass
 
     try:
         env_kwargs: dict[str, object] = {}
@@ -372,7 +525,6 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
 
             return window
 
-        # Read both bands inside a single rasterio environment
         with rasterio.Env(**env_kwargs):
             logger.debug("Opening red band %s", red_url)
             with rasterio.open(red_url) as red_src:
@@ -422,14 +574,26 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
 
         mean_ndvi = float(ndvi.mean())
         logger.info("calculate_ndvi_from_urls: mean NDVI=%.4f", mean_ndvi)
+
+        try:
+            ndvi_to_store = ndvi.filled(np.nan).astype("float32")
+            mask_to_store = np.ma.getmaskarray(ndvi)
+            np.savez_compressed(
+                cache_path,
+                ndvi=ndvi_to_store,
+                mask=mask_to_store,
+                mean=np.array([mean_ndvi], dtype="float32")
+            )
+            logger.debug("Cached NDVI result at %s", cache_path)
+        except Exception:
+            logger.exception("Failed to persist NDVI cache at %s", cache_path)
+
         return ndvi, mean_ndvi
 
     except Exception as e:
         logger.exception("NDVI calculation failed")
         st.warning(f"NDVI calculation error: {e}")
         return None, None
-
-
 
 # Main interface logic
 if search_button:
@@ -657,4 +821,5 @@ st.markdown("""
     <p><small>Data provided by NASA LP DAAC via the CMR-STAC API</small></p>
 </div>
 """, unsafe_allow_html=True)
+
 
