@@ -1,5 +1,8 @@
 # Bloom Monitor
 
+![](media/logo.png)
+
+
 A Streamlit app for exploring NASA HLS imagery, computing NDVI statistics, and monitoring algal bloom activity around configurable areas of interest (AOIs).
 
 ## Prerequisites
