@@ -16,14 +16,16 @@ from shapely.geometry import shape, box, mapping
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 from pathlib import Path
+from functools import partial
 import requests
 import hashlib
 import json
 import logging
+import concurrent.futures
 import math
 import os
 import time
-from typing import List, Tuple, Optional, Union
+from typing import List, Tuple, Optional, Union, Dict, Any
 import warnings
 warnings.filterwarnings("ignore")
 # Configure logger
@@ -126,6 +128,10 @@ def get_ndvi_cache_path(red_url: str, nir_url: str, bbox: List[float]) -> Path:
 
 STAC_CACHE_DIR = CACHE_ROOT / "stac"
 STAC_CACHE_VERSION = "1"
+
+STAC_PAGE_SIZE = 200
+STAC_MAX_ITEMS = 2000
+
 STAC_CACHE_TTL_SECONDS = 3600
 
 def get_stac_cache_path(bbox: List[float], start: str, end: str, max_cc: int,
@@ -398,7 +404,7 @@ with st.sidebar:
     days_back = st.slider(
         "Days back",
         min_value=7,
-        max_value=365,
+        max_value=1800,
         value=90,
         step=7
     )
@@ -468,11 +474,17 @@ def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
                 collections=[collection],
                 bbox=bbox,
                 datetime=f"{start}/{end}",
-                max_items=100
+                max_items=STAC_MAX_ITEMS,
+                limit=STAC_PAGE_SIZE
             )
-            items = list(search.items())
-            logger.debug("Collection %s returned %s items before filtering", collection, len(items))
-            all_items.extend(items)
+            collected = []
+            for item in search.items():
+                collected.append(item)
+                if len(collected) >= STAC_MAX_ITEMS:
+                    logger.warning("Reached STAC max items (%s) for %s; results truncated", STAC_MAX_ITEMS, collection)
+                    break
+            logger.debug("Collection %s returned %s items before filtering", collection, len(collected))
+            all_items.extend(collected)
 
         # Convert results into a DataFrame
         records = []
@@ -694,6 +706,41 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
         st.warning(f"NDVI calculation error: {e}")
         return None, None
 
+
+
+
+def compute_ndvi_for_row(row: Tuple, bbox: List[float], token: str) -> Dict[str, Any]:
+    if hasattr(row, "_asdict"):
+        data = row._asdict()
+    elif isinstance(row, dict):
+        data = row
+    else:
+        keys = ["id", "datetime", "cloud_cover", "collection", "nir_url", "red_url"]
+        data = {}
+        for idx, key in enumerate(keys):
+            if isinstance(row, (list, tuple)) and idx < len(row):
+                data[key] = row[idx]
+
+    scene_id = data.get("id")
+    red_url = data.get("red_url")
+    nir_url = data.get("nir_url")
+
+    if not red_url or not nir_url:
+        logger.debug("Skipping scene %s due to missing band URLs", scene_id)
+        return {}
+
+    logger.debug("Submitting NDVI task for scene=%s", scene_id)
+
+    _, mean_ndvi = calculate_ndvi_from_urls(red_url, nir_url, bbox, token)
+    if mean_ndvi is None:
+        return {}
+
+    return {
+        "date": data.get("datetime"),
+        "ndvi": mean_ndvi,
+        "cloud_cover": data.get("cloud_cover"),
+        "collection": data.get("collection"),
+    }
 @st.cache_data(ttl=3600)
 def fetch_weather_history(lat: float, lon: float, start_date: datetime, end_date: datetime) -> pd.DataFrame:
     start_str = start_date.strftime("%Y-%m-%d")
@@ -802,64 +849,61 @@ if search_button:
             # Output tabs
             tab1, tab2, tab3 = st.tabs(["NDVI time series", "Map", "Data table"])
 
+
+
+
+
             with tab1:
                 st.subheader("NDVI time series")
 
-                # Calculate NDVI metrics per scene
-                ndvi_data = []
                 progress_bar = st.progress(0)
                 status_text = st.empty()
 
-                for idx, row in df.iterrows():
-                    status_text.text(
-                        f"Processing {idx + 1}/{len(df)}: {row['datetime'].strftime('%Y-%m-%d')}"
-                    )
-                    logger.debug(
-                        "Row %s: scene=%s red=%s nir=%s",
-                        idx,
-                        row.get('id'),
-                        row.get('red_url'),
-                        row.get('nir_url')
-                    )
+                results: List[Dict[str, Any]] = []
+                row_tuples = list(df.itertuples(index=False))
+                if row_tuples:
+                    worker = partial(compute_ndvi_for_row, bbox=bbox, token=earthdata_token)
+                    max_workers = min(8, len(row_tuples))
+                    try:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                            chunk = max(1, len(row_tuples) // (max_workers * 4))
+                            future_to_index = {executor.submit(worker, row): idx for idx, row in enumerate(row_tuples)}
+                            completed = 0
+                            for future in concurrent.futures.as_completed(future_to_index):
+                                idx = future_to_index[future]
+                                completed += 1
+                                try:
+                                    result = future.result()
+                                except Exception:
+                                    logger.exception("NDVI worker failed for index %s", idx)
+                                else:
+                                    if result:
+                                        results.append(result)
+                                status_text.text(
+                                    f"Processing {completed}/{len(row_tuples)}: {df.iloc[idx]['datetime'].strftime('%Y-%m-%d')}"
+                                )
+                                progress_bar.progress(completed / len(row_tuples))
+                    except Exception:
+                        logger.exception("Parallel NDVI processing failed; falling back to sequential execution")
+                        results = []
 
-                    if row["red_url"] and row["nir_url"]:
-                        _, mean_ndvi = calculate_ndvi_from_urls(
-                            row["red_url"],
-                            row["nir_url"],
-                            bbox,
-                            earthdata_token
-                        )
-                        if mean_ndvi is not None:
-                            ndvi_data.append(
-                                {
-                                    "date": row["datetime"],
-                                    "ndvi": mean_ndvi,
-                                    "cloud_cover": row["cloud_cover"],
-                                    "collection": row["collection"],
-                                }
+                    if not results:
+                        logger.info("Parallel NDVI returned no results; retrying sequential execution")
+                        progress_bar.progress(0.0)
+                        for idx, row in enumerate(row_tuples):
+                            status_text.text(
+                                f"Processing {idx + 1}/{len(row_tuples)}: {df.iloc[idx]['datetime'].strftime('%Y-%m-%d')}"
                             )
-                            logger.debug(
-                                "Appended NDVI result for scene %s: %.4f",
-                                row.get('id'),
-                                mean_ndvi,
-                            )
-                        else:
-                            logger.debug(
-                                "NDVI computation returned None for scene %s", row.get('id')
-                            )
-                    else:
-                        logger.debug(
-                            "Skipping scene %s due to missing band URLs", row.get('id')
-                        )
-
-                    progress_bar.progress((idx + 1) / len(df))
+                            result = worker(row)
+                            if result:
+                                results.append(result)
+                            progress_bar.progress((idx + 1) / len(row_tuples))
 
                 status_text.empty()
                 progress_bar.empty()
 
-                if ndvi_data:
-                    ndvi_df = pd.DataFrame(ndvi_data)
-
+                if results:
+                    ndvi_df = pd.DataFrame(results).sort_values('date')
 
                     weather_df = pd.DataFrame()
                     if center_latitude is not None and center_longitude is not None:
@@ -868,8 +912,8 @@ if search_button:
                     fig = make_subplots(specs=[[{"secondary_y": True}]])
                     fig.add_trace(
                         go.Scatter(
-                            x=ndvi_df["date"],
-                            y=ndvi_df["ndvi"],
+                            x=ndvi_df['date'],
+                            y=ndvi_df['ndvi'],
                             mode="lines+markers",
                             name="NDVI",
                             line=dict(color="green", width=2),
@@ -895,8 +939,8 @@ if search_button:
                     if not weather_df.empty:
                         fig.add_trace(
                             go.Scatter(
-                                x=weather_df["date"],
-                                y=weather_df["clarity_index"],
+                                x=weather_df['date'],
+                                y=weather_df['clarity_index'],
                                 name="Clarity index (%)",
                                 line=dict(color="#1b9e77"),
                             ),
@@ -904,8 +948,8 @@ if search_button:
                         )
                         fig.add_trace(
                             go.Scatter(
-                                x=weather_df["date"],
-                                y=weather_df["humidity_mean"],
+                                x=weather_df['date'],
+                                y=weather_df['humidity_mean'],
                                 name="Humidity (%)",
                                 line=dict(color="#d95f02", dash="dash"),
                             ),
@@ -913,8 +957,8 @@ if search_button:
                         )
                         fig.add_trace(
                             go.Scatter(
-                                x=weather_df["date"],
-                                y=weather_df["temperature_mean"],
+                                x=weather_df['date'],
+                                y=weather_df['temperature_mean'],
                                 name="Temperature (deg C)",
                                 line=dict(color="#7570b3", dash="dot"),
                             ),
@@ -935,8 +979,6 @@ if search_button:
                     if not weather_df.empty:
                         st.caption("Weather source: Open-Meteo archive (daily means).")
 
-
-                    # Summary statistics
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
                         st.metric("Mean NDVI", f"{ndvi_df['ndvi'].mean():.3f}")
@@ -956,7 +998,6 @@ if search_button:
                         st.success("**Healthy potato canopy** - vigorous vegetative growth and photosynthesis")
                     else:
                         st.info("**Very dense canopy** - peak foliage; watch for lodging, pests, or late-season disease pressure")
-
                 else:
                     st.error("Could not compute NDVI for the retrieved scenes")
 
@@ -1109,6 +1150,3 @@ st.markdown("""
     <p><small>Data provided by NASA LP DAAC via the CMR-STAC API</small></p>
 </div>
 """, unsafe_allow_html=True)
-
-
-
