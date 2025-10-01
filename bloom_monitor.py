@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import pydeck as pdk
 from pystac_client import Client
 import rasterio
@@ -15,14 +16,14 @@ from shapely.geometry import shape, box, mapping
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 from pathlib import Path
-from itertools import chain
+import requests
 import hashlib
 import json
 import logging
 import math
 import os
 import time
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 import warnings
 warnings.filterwarnings("ignore")
 # Configure logger
@@ -42,10 +43,8 @@ DEFAULT_MIN_LAT = DEFAULT_CENTER_LAT - DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_MAX_LAT = DEFAULT_CENTER_LAT + DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_RADIUS_KM = 6.0
 
-
 APP_NAME = "Potato Crop Monitor"
 APP_LOGO_PATH = Path("media") / "small_logo.png"
-
 
 def extract_geometry_from_geojson(geojson_obj: dict) -> BaseGeometry:
     geojson_type = (geojson_obj or {}).get("type") if isinstance(geojson_obj, dict) else None
@@ -70,15 +69,13 @@ def extract_geometry_from_geojson(geojson_obj: dict) -> BaseGeometry:
         return shape(geojson_obj)
     raise ValueError("Unsupported GeoJSON structure; expected Feature, FeatureCollection, or geometry")
 
-
-
-
 def find_existing_secrets() -> bool:
     candidate_paths = (
         Path.home() / '.streamlit/secrets.toml',
         Path.cwd() / '.streamlit/secrets.toml',
     )
     return any(path.exists() for path in candidate_paths)
+
 def geometry_to_polygons(geometry: BaseGeometry) -> List[List[List[float]]]:
     if geometry is None or geometry.is_empty:
         return []
@@ -95,9 +92,7 @@ def geometry_to_polygons(geometry: BaseGeometry) -> List[List[List[float]]]:
         return polygons
     return []
 
-
 GEOJSON_DIR = Path("geojsons")
-
 
 def list_geojson_files(directory: Path) -> List[Path]:
     if not directory.exists():
@@ -110,13 +105,9 @@ def list_geojson_files(directory: Path) -> List[Path]:
         unique[file_path.name] = file_path
     return sorted(unique.values(), key=lambda f: f.name.lower())
 
-
-
-
 CACHE_ROOT = Path(".cache")
 NDVI_CACHE_DIR = CACHE_ROOT / "ndvi"
 NDVI_CACHE_VERSION = "1"
-
 
 def get_ndvi_cache_path(red_url: str, nir_url: str, bbox: List[float]) -> Path:
     payload = json.dumps(
@@ -133,11 +124,9 @@ def get_ndvi_cache_path(red_url: str, nir_url: str, bbox: List[float]) -> Path:
     key = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return cache_dir / f"{key}.npz"
 
-
 STAC_CACHE_DIR = CACHE_ROOT / "stac"
 STAC_CACHE_VERSION = "1"
 STAC_CACHE_TTL_SECONDS = 3600
-
 
 def get_stac_cache_path(bbox: List[float], start: str, end: str, max_cc: int,
                         dataset_type: str, token: str) -> Path:
@@ -154,7 +143,6 @@ def get_stac_cache_path(bbox: List[float], start: str, end: str, max_cc: int,
     cache_dir.mkdir(parents=True, exist_ok=True)
     key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     return cache_dir / f"{key}.json"
-
 
 def load_stac_cache(cache_path: Path) -> Optional[pd.DataFrame]:
     if not cache_path.exists():
@@ -191,7 +179,6 @@ def load_stac_cache(cache_path: Path) -> Optional[pd.DataFrame]:
         df["datetime"] = pd.to_datetime(df["datetime"])
         df = df.sort_values("datetime")
     return df
-
 
 def store_stac_cache(cache_path: Path, records: List[dict]) -> None:
     try:
@@ -262,6 +249,13 @@ def normalize_bbox(bbox: List[float]) -> List[float]:
     logger.debug("Normalised bbox=%s", normalised)
     return normalised
 
+
+
+def ensure_datetime(value: Union[datetime, date]) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    return datetime.combine(value, datetime.min.time())
+
 # Page configuration
 st.set_page_config(
     page_title=f"{APP_NAME} - HLS Analytics",
@@ -303,7 +297,6 @@ with st.sidebar:
         ["Corner coordinates", "Center + radius", "GeoJSON"],
         index=2 if geojson_files else 0
     )
-
 
     if input_method == "Corner coordinates":
         col1, col2 = st.columns(2)
@@ -435,7 +428,6 @@ with st.sidebar:
 
     search_button = st.button("Search scenes", type="primary", use_container_width=True)
 
-
 if bbox:
     logger.debug("Active bbox for queries: %s", bbox)
 
@@ -525,7 +517,6 @@ def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
         logger.exception("search_hls_data failed")
         st.error(f"Search error: {e}")
         return pd.DataFrame()
-
 
 def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
                              token: str) -> Tuple[np.ndarray, float]:
@@ -703,7 +694,71 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
         st.warning(f"NDVI calculation error: {e}")
         return None, None
 
+@st.cache_data(ttl=3600)
+def fetch_weather_history(lat: float, lon: float, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    start_str = start_date.strftime("%Y-%m-%d")
+    end_str = end_date.strftime("%Y-%m-%d")
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "start_date": start_str,
+        "end_date": end_str,
+        "hourly": "temperature_2m,relative_humidity_2m,cloudcover",
+        "timezone": "auto",
+    }
+    try:
+        response = requests.get(
+            "https://archive-api.open-meteo.com/v1/archive",
+            params=params,
+            timeout=30,
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        logger.exception("Weather API request failed")
+        st.warning(f"Weather data unavailable: {exc}")
+        return pd.DataFrame()
+
+    payload = response.json()
+    hourly = payload.get("hourly") or {}
+    times = hourly.get("time")
+    temps = hourly.get("temperature_2m")
+    humidity = hourly.get("relative_humidity_2m")
+    cloudcover = hourly.get("cloudcover")
+    if not times or not temps or not humidity or not cloudcover:
+        logger.warning("Incomplete weather data returned for lat=%s lon=%s", lat, lon)
+        return pd.DataFrame()
+
+    weather_df = pd.DataFrame(
+        {
+            "time": pd.to_datetime(times),
+            "temperature_c": pd.to_numeric(temps, errors="coerce"),
+            "humidity_pct": pd.to_numeric(humidity, errors="coerce"),
+            "cloudcover_pct": pd.to_numeric(cloudcover, errors="coerce"),
+        }
+    ).dropna()
+
+    if weather_df.empty:
+        return weather_df
+
+    daily = (
+        weather_df
+        .set_index("time")
+        .resample("D")
+        .mean()
+        .reset_index()
+    )
+    daily.rename(columns={
+        "time": "date",
+        "temperature_c": "temperature_mean",
+        "humidity_pct": "humidity_mean",
+        "cloudcover_pct": "cloudcover_mean",
+    }, inplace=True)
+    daily["clarity_index"] = 100.0 - daily["cloudcover_mean"].clip(lower=0, upper=100)
+    return daily
+
+
 # Main interface logic
+
 if search_button:
     if not earthdata_token:
         st.warning("Please set EARTHDATA_BEARER_TOKEN in your .env file.")
@@ -716,12 +771,24 @@ if search_button:
     elif not bbox:
         st.error(bbox_error or "Please provide an area of interest")
     else:
+        center_latitude: Optional[float] = None
+        center_longitude: Optional[float] = None
+        if aoi_geometry is not None and not aoi_geometry.is_empty:
+            centroid = aoi_geometry.centroid
+            center_latitude = centroid.y
+            center_longitude = centroid.x
+        elif bbox:
+            center_latitude = (bbox[1] + bbox[3]) / 2
+            center_longitude = (bbox[0] + bbox[2]) / 2
+
+        start_dt = ensure_datetime(start_date)
+        end_dt = ensure_datetime(end_date)
+
         with st.spinner("Searching HLS scenes..."):
-            # Run the search
             df = search_hls_data(
                 bbox=bbox,
-                start=start_date.strftime("%Y-%m-%d"),
-                end=end_date.strftime("%Y-%m-%d"),
+                start=start_dt.strftime("%Y-%m-%d"),
+                end=end_dt.strftime("%Y-%m-%d"),
                 max_cc=max_cloud_cover,
                 dataset_type=dataset,
                 _token=earthdata_token
@@ -747,7 +814,13 @@ if search_button:
                     status_text.text(
                         f"Processing {idx + 1}/{len(df)}: {row['datetime'].strftime('%Y-%m-%d')}"
                     )
-                    logger.debug("Row %s: scene=%s red=%s nir=%s", idx, row.get('id'), row.get('red_url'), row.get('nir_url'))
+                    logger.debug(
+                        "Row %s: scene=%s red=%s nir=%s",
+                        idx,
+                        row.get('id'),
+                        row.get('red_url'),
+                        row.get('nir_url')
+                    )
 
                     if row["red_url"] and row["nir_url"]:
                         _, mean_ndvi = calculate_ndvi_from_urls(
@@ -757,17 +830,27 @@ if search_button:
                             earthdata_token
                         )
                         if mean_ndvi is not None:
-                            ndvi_data.append({
-                                "date": row["datetime"],
-                                "ndvi": mean_ndvi,
-                                "cloud_cover": row["cloud_cover"],
-                                "collection": row["collection"]
-                            })
-                            logger.debug("Appended NDVI result for scene %s: %.4f", row.get('id'), mean_ndvi)
+                            ndvi_data.append(
+                                {
+                                    "date": row["datetime"],
+                                    "ndvi": mean_ndvi,
+                                    "cloud_cover": row["cloud_cover"],
+                                    "collection": row["collection"],
+                                }
+                            )
+                            logger.debug(
+                                "Appended NDVI result for scene %s: %.4f",
+                                row.get('id'),
+                                mean_ndvi,
+                            )
                         else:
-                            logger.debug("NDVI computation returned None for scene %s", row.get('id'))
+                            logger.debug(
+                                "NDVI computation returned None for scene %s", row.get('id')
+                            )
                     else:
-                        logger.debug("Skipping scene %s due to missing band URLs", row.get('id'))
+                        logger.debug(
+                            "Skipping scene %s due to missing band URLs", row.get('id')
+                        )
 
                     progress_bar.progress((idx + 1) / len(df))
 
@@ -777,41 +860,81 @@ if search_button:
                 if ndvi_data:
                     ndvi_df = pd.DataFrame(ndvi_data)
 
-                    # Time-series chart
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(
-                        x=ndvi_df["date"],
-                        y=ndvi_df["ndvi"],
-                        mode="lines+markers",
-                        name="NDVI",
-                        line=dict(color="green", width=2),
-                        marker=dict(size=8),
-                        hovertemplate="<b>Date:</b> %{x}<br><b>NDVI:</b> %{y:.3f}<extra></extra>"
-                    ))
 
-                    # Reference thresholds for interpretation
+                    weather_df = pd.DataFrame()
+                    if center_latitude is not None and center_longitude is not None:
+                        weather_df = fetch_weather_history(center_latitude, center_longitude, start_dt, end_dt)
+
+                    fig = make_subplots(specs=[[{"secondary_y": True}]])
+                    fig.add_trace(
+                        go.Scatter(
+                            x=ndvi_df["date"],
+                            y=ndvi_df["ndvi"],
+                            mode="lines+markers",
+                            name="NDVI",
+                            line=dict(color="green", width=2),
+                            marker=dict(size=8),
+                            hovertemplate="<b>Date:</b> %{x}<br><b>NDVI:</b> %{y:.3f}<extra></extra>",
+                        ),
+                        secondary_y=False,
+                    )
+
                     fig.add_hline(
                         y=0.3,
                         line_dash="dash",
                         line_color="orange",
-                        annotation_text="Early canopy target"
+                        annotation_text="Early canopy target",
                     )
                     fig.add_hline(
                         y=0.6,
                         line_dash="dash",
                         line_color="darkgreen",
-                        annotation_text="Peak foliage target"
+                        annotation_text="Peak foliage target",
                     )
 
+                    if not weather_df.empty:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=weather_df["date"],
+                                y=weather_df["clarity_index"],
+                                name="Clarity index (%)",
+                                line=dict(color="#1b9e77"),
+                            ),
+                            secondary_y=True,
+                        )
+                        fig.add_trace(
+                            go.Scatter(
+                                x=weather_df["date"],
+                                y=weather_df["humidity_mean"],
+                                name="Humidity (%)",
+                                line=dict(color="#d95f02", dash="dash"),
+                            ),
+                            secondary_y=True,
+                        )
+                        fig.add_trace(
+                            go.Scatter(
+                                x=weather_df["date"],
+                                y=weather_df["temperature_mean"],
+                                name="Temperature (deg C)",
+                                line=dict(color="#7570b3", dash="dot"),
+                            ),
+                            secondary_y=True,
+                        )
+
+                    fig.update_yaxes(title_text="NDVI", secondary_y=False)
+                    fig.update_yaxes(title_text="Weather metrics", secondary_y=True)
                     fig.update_layout(
-                        title="NDVI time series",
+                        title="NDVI and weather overview",
                         xaxis_title="Date",
-                        yaxis_title="NDVI",
                         hovermode="x unified",
-                        height=500
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                        height=520,
                     )
 
                     st.plotly_chart(fig, use_container_width=True)
+                    if not weather_df.empty:
+                        st.caption("Weather source: Open-Meteo archive (daily means).")
+
 
                     # Summary statistics
                     col1, col2, col3, col4 = st.columns(4)
@@ -824,10 +947,6 @@ if search_button:
                     with col4:
                         st.metric("Std. dev.", f"{ndvi_df['ndvi'].std():.3f}")
 
-                    # Interpretation
-                    st.markdown("---")
-                    st.subheader("Interpreting results")
-
                     mean_ndvi = ndvi_df['ndvi'].mean()
                     if mean_ndvi < 0.2:
                         st.error("**Severely stressed potatoes** - bare soil, standing water, or senescing vines")
@@ -837,6 +956,7 @@ if search_button:
                         st.success("**Healthy potato canopy** - vigorous vegetative growth and photosynthesis")
                     else:
                         st.info("**Very dense canopy** - peak foliage; watch for lodging, pests, or late-season disease pressure")
+
                 else:
                     st.error("Could not compute NDVI for the retrieved scenes")
 
@@ -853,16 +973,8 @@ if search_button:
                         [bbox[0], bbox[1]],
                     ]]
 
-                if aoi_geometry and not aoi_geometry.is_empty:
-                    centroid = aoi_geometry.centroid
-                    center_lat = centroid.y
-                    center_lon = centroid.x
-                elif bbox:
-                    center_lat = (bbox[1] + bbox[3]) / 2
-                    center_lon = (bbox[0] + bbox[2]) / 2
-                else:
-                    center_lat = DEFAULT_CENTER_LAT
-                    center_lon = DEFAULT_CENTER_LON
+                map_center_lat = center_latitude if center_latitude is not None else DEFAULT_CENTER_LAT
+                map_center_lon = center_longitude if center_longitude is not None else DEFAULT_CENTER_LON
 
                 layers = []
                 if polygons:
@@ -881,7 +993,7 @@ if search_button:
                 layers.append(
                     pdk.Layer(
                         "ScatterplotLayer",
-                        data=[{"position": [center_lon, center_lat]}],
+                        data=[{"position": [map_center_lon, map_center_lat]}],
                         get_position="position",
                         get_radius=750,
                         get_fill_color=[255, 215, 0, 180],
@@ -906,24 +1018,8 @@ if search_button:
                 deck = pdk.Deck(
                     map_style=map_style,
                     initial_view_state=pdk.ViewState(
-                        latitude=center_lat,
-                        longitude=center_lon,
-                        zoom=9,
-                        pitch=0,
-                    ),
-                    layers=layers,
-                    tooltip={"text": "AOI"},
-                )
-
-                if mapbox_token:
-                    pdk.settings.mapbox_api_key = mapbox_token
-
-                map_style = "mapbox://styles/mapbox/satellite-streets-v12" if mapbox_token else "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
-                deck = pdk.Deck(
-                    map_style=map_style,
-                    initial_view_state=pdk.ViewState(
-                        latitude=center_lat,
-                        longitude=center_lon,
+                        latitude=map_center_lat,
+                        longitude=map_center_lon,
                         zoom=9,
                         pitch=0,
                     ),
@@ -953,8 +1049,8 @@ if search_button:
                 st.download_button(
                     label="Download as CSV",
                     data=csv,
-                    file_name=f"hls_data_{start_date}_{end_date}.csv",
-                    mime="text/csv"
+                    file_name=f"hls_data_{start_dt.date()}_{end_dt.date()}.csv",
+                    mime="text/csv",
                 )
 else:
     # First-run instructions
@@ -1013,8 +1109,6 @@ st.markdown("""
     <p><small>Data provided by NASA LP DAAC via the CMR-STAC API</small></p>
 </div>
 """, unsafe_allow_html=True)
-
-
 
 
 

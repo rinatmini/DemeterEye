@@ -5,3 +5,6 @@ plotly
 pystac-client
 rasterio
 shapely
+pydeck
+requests
+
