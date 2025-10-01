@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+import pydeck as pdk
 from pystac_client import Client
 import rasterio
 from rasterio.warp import transform_bounds
@@ -10,10 +11,11 @@ try:
     from rasterio.session import AWSSession  # type: ignore
 except ImportError:
     AWSSession = None  # type: ignore
-from shapely.geometry import shape
+from shapely.geometry import shape, box, mapping
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 from pathlib import Path
+from itertools import chain
 import hashlib
 import json
 import logging
@@ -39,6 +41,60 @@ DEFAULT_MAX_LON = DEFAULT_CENTER_LON + DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_MIN_LAT = DEFAULT_CENTER_LAT - DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_MAX_LAT = DEFAULT_CENTER_LAT + DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_RADIUS_KM = 6.0
+
+
+APP_NAME = "Potato Crop Monitor"
+APP_LOGO_PATH = Path("media") / "small_logo.png"
+
+
+def extract_geometry_from_geojson(geojson_obj: dict) -> BaseGeometry:
+    geojson_type = (geojson_obj or {}).get("type") if isinstance(geojson_obj, dict) else None
+    if geojson_type == "Feature":
+        geometry = geojson_obj.get("geometry")
+        if geometry is None:
+            raise ValueError("Feature is missing geometry")
+        return shape(geometry)
+    if geojson_type == "FeatureCollection":
+        features = geojson_obj.get("features") or []
+        geometries = []
+        for feature in features:
+            if not isinstance(feature, dict):
+                continue
+            geometry = feature.get("geometry")
+            if geometry:
+                geometries.append(shape(geometry))
+        if not geometries:
+            raise ValueError("FeatureCollection contains no valid geometries")
+        return unary_union(geometries)
+    if isinstance(geojson_obj, dict) and geojson_type:
+        return shape(geojson_obj)
+    raise ValueError("Unsupported GeoJSON structure; expected Feature, FeatureCollection, or geometry")
+
+
+
+
+def find_existing_secrets() -> bool:
+    candidate_paths = (
+        Path.home() / '.streamlit/secrets.toml',
+        Path.cwd() / '.streamlit/secrets.toml',
+    )
+    return any(path.exists() for path in candidate_paths)
+def geometry_to_polygons(geometry: BaseGeometry) -> List[List[List[float]]]:
+    if geometry is None or geometry.is_empty:
+        return []
+    geojson = mapping(geometry)
+    geo_type = geojson.get("type")
+    if geo_type == "Polygon":
+        return [geojson["coordinates"]]
+    if geo_type == "MultiPolygon":
+        return list(geojson["coordinates"])
+    if geo_type == "GeometryCollection":
+        polygons: List[List[List[float]]] = []
+        for geom in geometry.geoms:  # type: ignore[attr-defined]
+            polygons.extend(geometry_to_polygons(geom))
+        return polygons
+    return []
+
 
 GEOJSON_DIR = Path("geojsons")
 
@@ -208,19 +264,23 @@ def normalize_bbox(bbox: List[float]) -> List[float]:
 
 # Page configuration
 st.set_page_config(
-    page_title="Bloom Monitor - HLS Analytics",
-    page_icon=":seedling:",
+    page_title=f"{APP_NAME} - HLS Analytics",
+    page_icon=str(APP_LOGO_PATH) if APP_LOGO_PATH.exists() else ":potato:",
     layout="wide"
 )
 
+if APP_LOGO_PATH.exists():
+    st.image(str(APP_LOGO_PATH), width=96)
+
 # Page title
-st.title("Bloom Monitor - HLS NDVI Analysis")
-st.markdown("**Monitor algal blooms with HLS (Harmonized Landsat Sentinel-2) imagery**")
+st.title(f"{APP_NAME} - HLS NDVI Analysis")
+st.markdown("**Assess potato crop health with HLS (Harmonized Landsat Sentinel-2) imagery**")
 
 # Sidebar controls
 
 earthdata_token = load_token_from_env()
 bbox = None
+aoi_geometry: Optional[BaseGeometry] = None
 bbox_error = None
 
 with st.sidebar:
@@ -255,9 +315,11 @@ with st.sidebar:
             max_lat = st.number_input("Max Latitude", value=round(DEFAULT_MAX_LAT, 4), format="%.4f")
         try:
             bbox = normalize_bbox([min_lon, min_lat, max_lon, max_lat])
+            aoi_geometry = box(bbox[0], bbox[1], bbox[2], bbox[3])
         except ValueError as exc:
             bbox_error = str(exc)
             bbox = None
+            aoi_geometry = None
             st.error(bbox_error)
 
     elif input_method == "Center + radius":
@@ -276,9 +338,11 @@ with st.sidebar:
                 center_lon + lon_offset,
                 center_lat + lat_offset
             ])
+            aoi_geometry = box(bbox[0], bbox[1], bbox[2], bbox[3])
         except ValueError as exc:
             bbox_error = str(exc)
             bbox = None
+            aoi_geometry = None
             st.error(bbox_error)
 
     else:  # GeoJSON
@@ -315,15 +379,14 @@ with st.sidebar:
         if geojson_input:
             try:
                 geojson_data = json.loads(geojson_input)
-                if geojson_data.get('type') == 'Feature':
-                    geom = shape(geojson_data['geometry'])
-                else:
-                    geom = shape(geojson_data)
+                geom = extract_geometry_from_geojson(geojson_data)
+                aoi_geometry = geom
                 raw_bbox = list(geom.bounds)
                 bbox = normalize_bbox(raw_bbox)
             except ValueError as exc:
                 bbox_error = str(exc)
                 bbox = None
+                aoi_geometry = None
                 st.error(bbox_error)
             except Exception as e:
                 st.error(f"Failed to parse GeoJSON: {e}")
@@ -731,13 +794,13 @@ if search_button:
                         y=0.3,
                         line_dash="dash",
                         line_color="orange",
-                        annotation_text="Vegetation threshold"
+                        annotation_text="Early canopy target"
                     )
                     fig.add_hline(
                         y=0.6,
                         line_dash="dash",
                         line_color="darkgreen",
-                        annotation_text="Dense vegetation"
+                        annotation_text="Peak foliage target"
                     )
 
                     fig.update_layout(
@@ -767,25 +830,107 @@ if search_button:
 
                     mean_ndvi = ndvi_df['ndvi'].mean()
                     if mean_ndvi < 0.2:
-                        st.info("**Low vegetation or water surface** - likely open water or minimal vegetation")
+                        st.error("**Severely stressed potatoes** - bare soil, standing water, or senescing vines")
                     elif mean_ndvi < 0.4:
-                        st.warning("**Moderate vegetation** - early signs of vegetation or bloom activity")
+                        st.warning("**Early canopy development** - emergence or sparse foliage; monitor inputs closely")
                     elif mean_ndvi < 0.6:
-                        st.success("**Active vegetation** - likely active algal bloom")
+                        st.success("**Healthy potato canopy** - vigorous vegetative growth and photosynthesis")
                     else:
-                        st.error("**Dense vegetation** - very high biomass, possible intense bloom")
+                        st.info("**Very dense canopy** - peak foliage; watch for lodging, pests, or late-season disease pressure")
                 else:
                     st.error("Could not compute NDVI for the retrieved scenes")
 
             with tab2:
                 st.subheader("AOI map")
 
-                # Build a simple map around the AOI
-                center_lat = (bbox[1] + bbox[3]) / 2
-                center_lon = (bbox[0] + bbox[2]) / 2
+                polygons = geometry_to_polygons(aoi_geometry) if aoi_geometry else []
+                if not polygons and bbox:
+                    polygons = [[
+                        [bbox[0], bbox[1]],
+                        [bbox[2], bbox[1]],
+                        [bbox[2], bbox[3]],
+                        [bbox[0], bbox[3]],
+                        [bbox[0], bbox[1]],
+                    ]]
 
-                map_data = pd.DataFrame({"lat": [center_lat], "lon": [center_lon]})
-                st.map(map_data, zoom=8)
+                if aoi_geometry and not aoi_geometry.is_empty:
+                    centroid = aoi_geometry.centroid
+                    center_lat = centroid.y
+                    center_lon = centroid.x
+                elif bbox:
+                    center_lat = (bbox[1] + bbox[3]) / 2
+                    center_lon = (bbox[0] + bbox[2]) / 2
+                else:
+                    center_lat = DEFAULT_CENTER_LAT
+                    center_lon = DEFAULT_CENTER_LON
+
+                layers = []
+                if polygons:
+                    polygon_data = [{"polygon": poly} for poly in polygons]
+                    layers.append(
+                        pdk.Layer(
+                            "PolygonLayer",
+                            polygon_data,
+                            get_polygon="polygon",
+                            get_fill_color=[34, 139, 34, 80],
+                            get_line_color=[34, 139, 34],
+                            line_width_min_pixels=2,
+                        )
+                    )
+
+                layers.append(
+                    pdk.Layer(
+                        "ScatterplotLayer",
+                        data=[{"position": [center_lon, center_lat]}],
+                        get_position="position",
+                        get_radius=750,
+                        get_fill_color=[255, 215, 0, 180],
+                        get_line_color=[0, 100, 0],
+                        line_width_min_pixels=1,
+                    )
+                )
+
+                mapbox_token = os.getenv("MAPBOX_API_KEY")
+                if not mapbox_token and find_existing_secrets():
+                    try:
+                        mapbox_token = st.secrets.get("mapbox_api_key")  # type: ignore[attr-defined]
+                    except Exception:
+                        mapbox_token = None
+
+                if mapbox_token:
+                    pdk.settings.mapbox_api_key = mapbox_token
+                    map_style = "mapbox://styles/mapbox/satellite-streets-v12"
+                else:
+                    map_style = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
+
+                deck = pdk.Deck(
+                    map_style=map_style,
+                    initial_view_state=pdk.ViewState(
+                        latitude=center_lat,
+                        longitude=center_lon,
+                        zoom=9,
+                        pitch=0,
+                    ),
+                    layers=layers,
+                    tooltip={"text": "AOI"},
+                )
+
+                if mapbox_token:
+                    pdk.settings.mapbox_api_key = mapbox_token
+
+                map_style = "mapbox://styles/mapbox/satellite-streets-v12" if mapbox_token else "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
+                deck = pdk.Deck(
+                    map_style=map_style,
+                    initial_view_state=pdk.ViewState(
+                        latitude=center_lat,
+                        longitude=center_lon,
+                        zoom=9,
+                        pitch=0,
+                    ),
+                    layers=layers,
+                    tooltip={"text": "AOI"},
+                )
+                st.pydeck_chart(deck)
 
                 st.info(f"""
                 **AOI summary:**
@@ -814,12 +959,12 @@ if search_button:
 else:
     # First-run instructions
     st.info("""
-    ### Welcome to Bloom Monitor!
+    ### Welcome to Potato Crop Monitor!
 
     **What you can do with this app:**
     - Retrieve HLS (Harmonized Landsat Sentinel-2) imagery at 30 m resolution
-    - Analyse NDVI time series to monitor blooms
-    - Visualise vegetation change over time
+    - Analyse NDVI time series to track potato canopy vigor
+    - Compare management zones across multiple observation dates
 
     **To get started:**
     1. Request a free token at https://urs.earthdata.nasa.gov/
@@ -827,44 +972,49 @@ else:
     3. Choose the time range
     4. Select "Search scenes"
 
-    **NDVI interpretation:**
-    - < 0.2: Water, bare ground, or snow
-    - 0.2-0.4: Sparse vegetation
-    - 0.4-0.6: Moderate vegetation
-    - > 0.6: Dense vegetation
+    **NDVI interpretation for potatoes:**
+    - < 0.2: Bare soil, standing water, or senescing vines
+    - 0.2-0.4: Emerging canopy or stressed plants
+    - 0.4-0.6: Healthy vegetative growth
+    - > 0.6: Peak foliage; monitor for disease and nutrient demand
     """)
 
     # Example AOIs
     st.markdown("### Sample AOIs to try")
 
     st.markdown("""
-    **Default AOI - Lake Sammamish (WA, USA)**\n    - Center: 47.6046 deg N, -122.0926 deg W\n    - Suggested radius: 6 km\n    """)
+    **Sun Valley Potatoes (ID, USA)**  
+    - Use the bundled `geojsons/sun_valley_potatoes.json`
+    - Suggested season: May-August
+    """)
 
     col1, col2 = st.columns(2)
 
     with col1:
         st.markdown("""
-        **Discovery Park (Seattle, WA, USA)**  
-        Coastal bluffs and nearshore waters on Puget Sound
-        - Center: 47.6658 deg N, -122.4386 deg W
-        - Suggested radius: 5 km
+        **Snake River Plain Center Pivots (ID, USA)**  
+        Large irrigated potato blocks near American Falls
+        - Center: 42.7730 deg N, -112.8480 deg W
+        - Suggested radius: 6 km
         """)
 
     with col2:
         st.markdown("""
-        **Deception Pass (WA, USA)**  
-        Dynamic coastal waters with frequent bloom activity
-        - Center: 48.4063 deg N, -122.6754 deg W
-        - Suggested radius: 5 km
+        **Red River Valley Fields (ND/MN, USA)**  
+        Loamy soils with intensive potato production
+        - Center: 47.8100 deg N, -96.8200 deg W
+        - Suggested radius: 6 km
         """)
-
 # Footer
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: gray;'>
-    <p>Bloom Monitor v1.0 | Data source: NASA HLS v2.0 | Built with Streamlit</p>
+    <p>Potato Crop Monitor v1.0 | Data source: NASA HLS v2.0 | Built with Streamlit</p>
     <p><small>Data provided by NASA LP DAAC via the CMR-STAC API</small></p>
 </div>
 """, unsafe_allow_html=True)
+
+
+
 
 
