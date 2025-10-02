@@ -1,3 +1,4 @@
+from enum import Enum
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -109,8 +110,7 @@ def list_geojson_files(directory: Path) -> List[Path]:
     return sorted(unique.values(), key=lambda f: f.name.lower())
 
 CACHE_ROOT = Path(".cache")
-NDVI_CACHE_DIR = CACHE_ROOT / "ndvi"
-NDVI_CACHE_VERSION = "1"
+INDEX_CACHE_VERSION = "1"
 
 # HLS products have 30 m ground sampling distance; used to convert pixels to area.
 HLS_PIXEL_RESOLUTION_METERS = 30.0
@@ -153,17 +153,22 @@ CROP_PROFILES = (
     },
 )
 
-def get_ndvi_cache_path(red_url: str, nir_url: str, bbox: List[float]) -> Path:
+class IndexType(Enum):
+    NDVI = 1
+    EVI = 2
+
+def get_index_cache_path(index_type: IndexType, red_url: str, blue_url: str, nir_url: str, bbox: List[float]) -> Path:
     payload = json.dumps(
         {
             "red": red_url,
+            "blue": blue_url,
             "nir": nir_url,
             "bbox": [round(float(coord), 6) for coord in bbox],
-            "version": NDVI_CACHE_VERSION
+            "version": INDEX_CACHE_VERSION
         },
         sort_keys=True
     )
-    cache_dir = NDVI_CACHE_DIR
+    cache_dir = CACHE_ROOT / index_type.name
     cache_dir.mkdir(parents=True, exist_ok=True)
     key = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return cache_dir / f"{key}.npz"
@@ -253,7 +258,8 @@ def store_stac_cache(cache_path: Path, records: List[dict]) -> None:
                 "cloud_cover": cloud_cover,
                 "collection": record.get("collection"),
                 "nir_url": record.get("nir_url"),
-                "red_url": record.get("red_url")
+                "red_url": record.get("red_url"),
+                "blue_url": record.get("blue_url"),
             })
 
         cache_path.write_text(json.dumps({"records": serialisable}), encoding="utf-8")
@@ -316,7 +322,7 @@ if APP_LOGO_PATH.exists():
 
 # Page title
 st.title(f"{APP_NAME} - NDVI Analysis")
-st.markdown("**Assess crop canopy health with HLS (Harmonized Landsat Sentinel-2) imagery**")
+st.markdown("**Assess crop canopy vigor with HLS (Harmonized Landsat Sentinel-2) imagery**")
 
 # Sidebar controls
 
@@ -481,6 +487,117 @@ if bbox:
     logger.debug("Active bbox for queries: %s", bbox)
 
 # HLS helper functions
+def estimate_crop_size_ranking(mean_ndvi: float, reference_area_ha: float) -> pd.DataFrame:
+    """Estimate feasible crop areas for multiple crop types using NDVI heuristics."""
+
+    if reference_area_ha <= 0 or math.isnan(reference_area_ha) or math.isnan(mean_ndvi):
+        return pd.DataFrame()
+
+    rows = []
+    for profile in CROP_PROFILES:
+        tolerance = profile.get('ndvi_tolerance', 0.25)
+        yield_t_per_ha = profile.get('yield_t_per_ha')
+        if tolerance <= 0:
+            continue
+        match_ratio = 1.0 - abs(mean_ndvi - profile['ndvi_optimal']) / tolerance
+        match_ratio = max(0.0, min(1.0, match_ratio))
+        min_match = float(profile.get('min_match', 0.0) or 0.0)
+        floor_applied = False
+        if min_match > 0 and match_ratio < min_match:
+            match_ratio = min(min_match, 1.0)
+            floor_applied = True
+        estimated_area = reference_area_ha * match_ratio
+        if not yield_t_per_ha or yield_t_per_ha <= 0:
+            continue
+        estimated_yield = estimated_area * yield_t_per_ha
+        rows.append({
+            'Crop': profile['name'],
+            'Match': match_ratio,
+            'Estimated area (ha)': estimated_area,
+            'Estimated yield (t)': estimated_yield,
+            'Match floor': 'Yes' if floor_applied else 'No',
+        })
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df.sort_values(by='Estimated yield (t)', ascending=False, inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    return df
+
+
+def build_yearly_crop_rankings(ndvi_df: pd.DataFrame, crop_df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate crop rankings into multi-year averages."""
+
+    if ndvi_df.empty or crop_df.empty:
+        return pd.DataFrame()
+
+    ndvi_yearly = (
+        ndvi_df.assign(year=pd.to_datetime(ndvi_df['date']).dt.year)
+        .groupby('year')['mean_NDVI']
+        .mean()
+        .dropna()
+    )
+
+    crop_area_yearly = (
+        crop_df.assign(year=pd.to_datetime(crop_df['date']).dt.year)
+        .groupby('year')['crop_area_hectares']
+        .mean()
+        .dropna()
+    )
+
+    common_years = sorted(set(ndvi_yearly.index).intersection(crop_area_yearly.index))
+    if not common_years:
+        return pd.DataFrame()
+
+    per_year_rankings: List[pd.DataFrame] = []
+    for year in common_years:
+        mean_ndvi_year = float(ndvi_yearly.loc[year])
+        reference_area_year = float(crop_area_yearly.loc[year])
+        if reference_area_year <= 0 or math.isnan(reference_area_year) or math.isnan(mean_ndvi_year):
+            continue
+        ranking = estimate_crop_size_ranking(mean_ndvi_year, reference_area_year)
+        if ranking.empty:
+            continue
+        ranking.insert(0, 'Year', int(year))
+        per_year_rankings.append(ranking)
+
+    if not per_year_rankings:
+        return pd.DataFrame()
+
+    per_year_df = pd.concat(per_year_rankings, ignore_index=True)
+
+    summary = (
+        per_year_df
+        .groupby('Crop')
+        .agg({
+            'Estimated area (ha)': 'mean',
+            'Estimated yield (t)': 'mean',
+            'Match': 'mean',
+            'Match floor': lambda col: 'Yes' if (col == 'Yes').any() else 'No',
+            'Year': lambda col: sorted(set(int(v) for v in col)),
+        })
+        .reset_index()
+    )
+
+    if summary.empty:
+        return summary
+
+    summary['Years included'] = summary['Year'].apply(lambda years: ', '.join(str(y) for y in years))
+    summary['Year count'] = summary['Year'].apply(len)
+    summary = summary.drop(columns=['Year'])
+    summary = summary.rename(columns={
+        'Match': 'NDVI match',
+        'Match floor': 'Match floor applied',
+    })
+
+    summary['Match floor applied'] = summary['Match floor applied'].astype(str)
+    summary.sort_values(by='Estimated yield (t)', ascending=False, inplace=True)
+    summary.reset_index(drop=True, inplace=True)
+    return summary
+
+
 @st.cache_data(ttl=3600)
 def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
                     dataset_type: str, _token: str) -> pd.DataFrame:
@@ -543,11 +660,13 @@ def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
 
             nir_asset = item.assets.get('B8A') or item.assets.get('B05')
             red_asset = item.assets.get('B04')
+            blue_asset = item.assets.get('B02')
 
             nir_url = getattr(nir_asset, 'href', None)
             red_url = getattr(red_asset, 'href', None)
-            if not nir_url or not red_url:
-                logger.debug("Skipping item %s: missing required bands (red=%s, nir=%s)", item.id, bool(red_url), bool(nir_url))
+            blue_url = getattr(blue_asset, 'href', None)
+            if not nir_url or not red_url or not blue_url:
+                logger.debug("Skipping item %s: missing required bands (red=%s, nir=%s, blue=%s)", item.id, bool(red_url), bool(nir_url), bool(blue_url))
                 continue
 
             records.append({
@@ -556,7 +675,8 @@ def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
                 "cloud_cover": float(cloud_cover),
                 "collection": item.collection_id,
                 "nir_url": nir_url,
-                "red_url": red_url
+                "red_url": red_url,
+                "blue_url": blue_url
             })
             logger.debug("Kept item %s (collection=%s)", item.id, item.collection_id)
 
@@ -573,50 +693,52 @@ def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
         st.error(f"Search error: {e}")
         return pd.DataFrame()
 
-def summarise_ndvi_stats(ndvi: np.ma.MaskedArray, mean_ndvi: float) -> Dict[str, float]:
+
+def summarise_ndvi_stats(ndvi: Optional[np.ma.MaskedArray], mean_ndvi: float) -> Dict[str, float]:
     """Derive crop-cover metrics from an NDVI raster."""
 
-    if ndvi is None or ndvi.size == 0:
+    if ndvi is None or getattr(ndvi, 'size', 0) == 0:
         return {
-            "mean_ndvi": float("nan"),
-            "crop_fraction": float("nan"),
-            "crop_percent": float("nan"),
-            "crop_area_hectares": float("nan"),
-            "total_area_hectares": float("nan"),
+            'mean_ndvi': mean_ndvi,
+            'crop_fraction': float('nan'),
+            'crop_percent': float('nan'),
+            'crop_area_hectares': float('nan'),
+            'total_area_hectares': float('nan'),
         }
 
     valid_values = ndvi.compressed()
     valid_pixels = int(valid_values.size)
     if valid_pixels == 0:
         return {
-            "mean_ndvi": mean_ndvi,
-            "crop_fraction": float("nan"),
-            "crop_percent": float("nan"),
-            "crop_area_hectares": float("nan"),
-            "total_area_hectares": float("nan"),
+            'mean_ndvi': mean_ndvi,
+            'crop_fraction': float('nan'),
+            'crop_percent': float('nan'),
+            'crop_area_hectares': float('nan'),
+            'total_area_hectares': float('nan'),
         }
 
     crop_pixels = int(np.count_nonzero(valid_values >= CROP_NDVI_THRESHOLD))
-    crop_fraction = crop_pixels / valid_pixels if valid_pixels else float("nan")
+    crop_fraction = crop_pixels / valid_pixels if valid_pixels else float('nan')
     crop_area_hectares = (crop_pixels * HLS_PIXEL_AREA_SQM) / 10000.0
     total_area_hectares = (valid_pixels * HLS_PIXEL_AREA_SQM) / 10000.0
 
     return {
-        "mean_ndvi": mean_ndvi,
-        "crop_fraction": crop_fraction,
-        "crop_percent": crop_fraction * 100.0,
-        "crop_area_hectares": crop_area_hectares,
-        "total_area_hectares": total_area_hectares,
+        'mean_ndvi': mean_ndvi,
+        'crop_fraction': crop_fraction,
+        'crop_percent': crop_fraction * 100.0,
+        'crop_area_hectares': crop_area_hectares,
+        'total_area_hectares': total_area_hectares,
     }
 
 
-def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
-                             token: str) -> Tuple[Optional[np.ma.MaskedArray], Dict[str, float]]:
-    """Compute NDVI from two COG asset URLs and derive summary metrics."""
+def calculate_index_from_urls(index_type: IndexType, red_url: str, blue_url: str, nir_url: str, bbox: List[float],
+                             token: str) -> Tuple[Optional[np.ma.MaskedArray], Optional[float], Optional[Dict[str, float]]]:
+    """Compute vegetation index from COG assets and derive NDVI statistics when applicable."""
 
     logger.info(
-        "calculate_ndvi_from_urls: red_url=%s nir_url=%s bbox=%s token_provided=%s",
+        "calculate_index_from_urls: red_url=%s blue_url=%s nir_url=%s bbox=%s token_provided=%s",
         red_url,
+        blue_url,
         nir_url,
         bbox,
         bool(token)
@@ -625,24 +747,24 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
     try:
         bbox = normalize_bbox(bbox)
     except ValueError:
-        logger.exception("NDVI calculation received invalid bbox")
-        st.warning("NDVI calculation error: invalid bounding box")
-        return None, {}
+        logger.exception("Vegetation index calculation received invalid bbox")
+        st.warning("Vegetation index calculation error: invalid bounding box")
+        return None, None, None
 
-    cache_path = get_ndvi_cache_path(red_url, nir_url, bbox)
+    cache_path = get_index_cache_path(index_type, red_url, blue_url, nir_url, bbox)
 
     if cache_path.exists():
         try:
             with np.load(cache_path, allow_pickle=False) as cached:
-                ndvi_data = cached["ndvi"]
-                mask = cached["mask"]
-                mean_ndvi = float(cached["mean"].item())
-            ndvi = np.ma.array(ndvi_data, mask=mask)
-            logger.debug("Loaded NDVI from cache for %s", cache_path.name)
-            stats = summarise_ndvi_stats(ndvi, mean_ndvi)
-            return ndvi, stats
+                index_data = cached[index_type.name]
+                mask = cached['mask']
+                mean_index = float(cached['mean'].item())
+            masked_data = np.ma.array(index_data, mask=mask)
+            stats = summarise_ndvi_stats(masked_data, mean_index) if index_type is IndexType.NDVI else None
+            logger.debug("Loaded index data from cache for %s", cache_path.name)
+            return masked_data, mean_index, stats
         except Exception:
-            logger.exception("Failed to load NDVI cache from %s", cache_path)
+            logger.exception("Failed to load index data cache from %s", cache_path)
             try:
                 cache_path.unlink()
             except FileNotFoundError:
@@ -652,15 +774,15 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
         env_kwargs: dict[str, object] = {}
         session = None
         if token:
-            env_kwargs["GDAL_HTTP_HEADERS"] = f"Authorization: Bearer {token}"
-            env_kwargs["GDAL_DISABLE_READDIR_ON_OPEN"] = "EMPTY_DIR"
-            env_kwargs["GDAL_HTTP_MULTIRANGE"] = "YES"
+            env_kwargs['GDAL_HTTP_HEADERS'] = f"Authorization: Bearer {token}"
+            env_kwargs['GDAL_DISABLE_READDIR_ON_OPEN'] = 'EMPTY_DIR'
+            env_kwargs['GDAL_HTTP_MULTIRANGE'] = 'YES'
             logger.debug("Attempting to create AWSSession for provided NASA token")
             if AWSSession is not None:
                 try:
                     session = AWSSession(
-                        aws_access_key_id="",
-                        aws_secret_access_key="",
+                        aws_access_key_id='',
+                        aws_secret_access_key='',
                         aws_session_token=token
                     )
                     logger.debug("AWSSession created: %s", session)
@@ -669,7 +791,7 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
                 except Exception:
                     logger.exception("Failed to create AWSSession; continuing with GDAL HTTP headers")
                 else:
-                    env_kwargs["session"] = session
+                    env_kwargs['session'] = session
             else:
                 logger.debug("AWSSession class unavailable; using GDAL HTTP headers only.")
         else:
@@ -678,7 +800,7 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
         def _window_from_bbox(src_obj: rasterio.io.DatasetReader):
             try:
                 left, bottom, right, top = transform_bounds(
-                    "EPSG:4326",
+                    'EPSG:4326',
                     src_obj.crs,
                     bbox[0],
                     bbox[1],
@@ -722,227 +844,137 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
             with rasterio.open(red_url) as red_src:
                 red_window = _window_from_bbox(red_src)
                 if red_window is None:
-                    return None, {}
+                    return None, None, None
                 red = red_src.read(1, window=red_window, masked=True)
                 logger.debug("Read red band with shape %s", getattr(red, 'shape', None))
+
+            logger.debug("Opening blue band %s", blue_url)
+            with rasterio.open(blue_url) as blue_src:
+                blue_window = _window_from_bbox(blue_src)
+                if blue_window is None:
+                    return None, None, None
+                blue = blue_src.read(1, window=blue_window, masked=True)
+                logger.debug("Read blue band with shape %s", getattr(blue, 'shape', None))
 
             logger.debug("Opening NIR band %s", nir_url)
             with rasterio.open(nir_url) as nir_src:
                 nir_window = _window_from_bbox(nir_src)
                 if nir_window is None:
-                    return None, {}
+                    return None, None, None
                 nir = nir_src.read(1, window=nir_window, masked=True)
                 logger.debug("Read NIR band with shape %s", getattr(nir, 'shape', None))
 
         if red.size == 0 or nir.size == 0:
-            logger.warning(
-                "AOI read returned empty arrays (red=%s, nir=%s)",
-                red.size,
-                nir.size
-            )
-            return None, {}
+            logger.warning("AOI read returned empty arrays (red=%s, nir=%s)", red.size, nir.size)
+            return None, None, None
 
-        if red.shape != nir.shape:
+        if red.shape != nir.shape or red.shape != blue.shape:
             logger.warning(
-                "Band windows differ in shape for %s vs %s: %s vs %s",
+                "Band windows differ in shape for %s vs %s vs %s: %s vs %s vs %s",
                 red_url,
+                blue_url,
                 nir_url,
                 red.shape,
+                blue.shape,
                 nir.shape
             )
-            return None, {}
+            return None, None, None
 
-        red_data = red.astype("float32")
-        nir_data = nir.astype("float32")
+        red_data = red.astype('float32')
+        blue_data = blue.astype('float32')
+        nir_data = nir.astype('float32')
 
-        with np.errstate(divide='ignore', invalid='ignore'):
-            ndvi = (nir_data - red_data) / (nir_data + red_data)
+        match index_type:
+            case IndexType.NDVI:
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    ndvi = (nir_data - red_data) / (nir_data + red_data)
+                combined_mask = np.ma.getmaskarray(red) | np.ma.getmaskarray(nir)
+                masked_data = np.ma.array(ndvi, mask=combined_mask)
+            case IndexType.EVI:
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    evi = 2.5 * (nir_data - red_data) / (nir_data + 6 * red_data - 7.5 * blue_data + 1)
+                combined_mask = (
+                    np.ma.getmaskarray(red)
+                    | np.ma.getmaskarray(blue)
+                    | np.ma.getmaskarray(nir)
+                )
+                masked_data = np.ma.array(evi, mask=combined_mask)
 
-        combined_mask = np.ma.getmaskarray(red) | np.ma.getmaskarray(nir)
-        ndvi = np.ma.array(ndvi, mask=combined_mask)
-        if ndvi.count() == 0:
-            logger.warning("NDVI computation has no valid pixels for %s", red_url)
-            return None, {}
+        if masked_data.count() == 0:
+            logger.warning("Vegetation index computation has no valid pixels for %s", red_url)
+            return None, None, None
 
-        mean_ndvi = float(ndvi.mean())
-        logger.info("calculate_ndvi_from_urls: mean NDVI=%.4f", mean_ndvi)
-        stats = summarise_ndvi_stats(ndvi, mean_ndvi)
+        mean_index = float(masked_data.mean())
+        logger.info("calculate_index_from_urls: mean index=%.4f", mean_index)
+
+        stats = summarise_ndvi_stats(masked_data, mean_index) if index_type is IndexType.NDVI else None
 
         try:
-            ndvi_to_store = ndvi.filled(np.nan).astype("float32")
-            mask_to_store = np.ma.getmaskarray(ndvi)
-            np.savez_compressed(
-                cache_path,
-                ndvi=ndvi_to_store,
-                mask=mask_to_store,
-                mean=np.array([mean_ndvi], dtype="float32")
-            )
-            logger.debug("Cached NDVI result at %s", cache_path)
+            index_data_to_store = masked_data.filled(np.nan).astype('float32')
+            mask_to_store = np.ma.getmaskarray(masked_data)
+            data_to_save = {
+                index_type.name: index_data_to_store,
+                'mask': mask_to_store,
+                'mean': np.array([mean_index], dtype='float32'),
+            }
+            np.savez_compressed(cache_path, **data_to_save)
+            logger.debug("Cached Vegetation index result at %s", cache_path)
         except Exception:
-            logger.exception("Failed to persist NDVI cache at %s", cache_path)
+            logger.exception("Failed to persist Vegetation index cache at %s", cache_path)
 
-        return ndvi, stats
+        return masked_data, mean_index, stats
 
     except Exception as e:
-        logger.exception("NDVI calculation failed")
-        st.warning(f"NDVI calculation error: {e}")
-        return None, {}
+        logger.exception("Vegetation index calculation failed")
+        st.warning(f"Vegetation index calculation error: {e}")
+        return None, None, None
 
 
-
-
-def compute_ndvi_for_row(row: Tuple, bbox: List[float], token: str) -> Dict[str, Any]:
+def compute_index_for_row(row: Tuple, index_types: List[IndexType], bbox: List[float], token: str) -> Dict[str, Any]:
     if hasattr(row, "_asdict"):
         data = row._asdict()
     elif isinstance(row, dict):
         data = row
     else:
-        keys = ["id", "datetime", "cloud_cover", "collection", "nir_url", "red_url"]
-        data = {}
+        keys = ["id", "datetime", "cloud_cover", "collection", "nir_url", "red_url", "blue_url"]
+        data: Dict[str, Any] = {}
         for idx, key in enumerate(keys):
             if isinstance(row, (list, tuple)) and idx < len(row):
                 data[key] = row[idx]
 
     scene_id = data.get("id")
     red_url = data.get("red_url")
+    blue_url = data.get("blue_url")
     nir_url = data.get("nir_url")
 
-    if not red_url or not nir_url:
+    if not red_url or not nir_url or not blue_url:
         logger.debug("Skipping scene %s due to missing band URLs", scene_id)
         return {}
 
     logger.debug("Submitting NDVI task for scene=%s", scene_id)
 
-    _, stats = calculate_ndvi_from_urls(red_url, nir_url, bbox, token)
-    if not stats:
-        return {}
-
-    mean_ndvi = stats.get("mean_ndvi")
-    if mean_ndvi is None or (isinstance(mean_ndvi, float) and math.isnan(mean_ndvi)):
-        return {}
-
-    return {
+    result: Dict[str, Any] = {
         "date": data.get("datetime"),
-        "ndvi": mean_ndvi,
         "cloud_cover": data.get("cloud_cover"),
         "collection": data.get("collection"),
-        "crop_percent": stats.get("crop_percent"),
-        "crop_fraction": stats.get("crop_fraction"),
-        "crop_area_hectares": stats.get("crop_area_hectares"),
-        "total_area_hectares": stats.get("total_area_hectares"),
     }
 
-
-def estimate_crop_size_ranking(mean_ndvi: float, reference_area_ha: float) -> pd.DataFrame:
-    """Estimate feasible crop areas for multiple crop types using NDVI heuristics."""
-
-    if reference_area_ha <= 0 or math.isnan(reference_area_ha) or math.isnan(mean_ndvi):
-        return pd.DataFrame()
-
-    rows = []
-    for profile in CROP_PROFILES:
-        tolerance = profile.get("ndvi_tolerance", 0.25)
-        yield_t_per_ha = profile.get("yield_t_per_ha")
-        if tolerance <= 0:
+    for index_type in index_types:
+        index_data, mean_index, stats = calculate_index_from_urls(index_type, red_url, blue_url, nir_url, bbox, token)
+        if index_data is None or mean_index is None:
             continue
-        match_ratio = 1.0 - abs(mean_ndvi - profile["ndvi_optimal"]) / tolerance
-        match_ratio = max(0.0, min(1.0, match_ratio))
-        min_match = float(profile.get("min_match", 0.0) or 0.0)
-        floor_applied = False
-        if min_match > 0 and match_ratio < min_match:
-            match_ratio = min(min_match, 1.0)
-            floor_applied = True
-        estimated_area = reference_area_ha * match_ratio
-        if yield_t_per_ha is None or yield_t_per_ha <= 0:
-            continue
-        estimated_yield = estimated_area * yield_t_per_ha
-        rows.append({
-            "Crop": profile["name"],
-            "Match": match_ratio,
-            "Estimated area (ha)": estimated_area,
-            "Estimated yield (t)": estimated_yield,
-            "Match floor": "Yes" if floor_applied else "No",
-        })
 
-    if not rows:
-        return pd.DataFrame()
+        result[f"mean_{index_type.name}"] = mean_index
 
-    df = pd.DataFrame(rows)
-    df.sort_values(by="Estimated yield (t)", ascending=False, inplace=True)
-    df.reset_index(drop=True, inplace=True)
-    return df
+        if index_type is IndexType.NDVI and stats:
+            result["crop_fraction"] = stats.get("crop_fraction")
+            result["crop_percent"] = stats.get("crop_percent")
+            result["crop_area_hectares"] = stats.get("crop_area_hectares")
+            result["total_area_hectares"] = stats.get("total_area_hectares")
+
+    return result
 
 
-def build_yearly_crop_rankings(ndvi_df: pd.DataFrame, crop_df: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate crop rankings into multi-year averages."""
-
-    if ndvi_df.empty or crop_df.empty:
-        return pd.DataFrame()
-
-    ndvi_yearly = (
-        ndvi_df.assign(year=pd.to_datetime(ndvi_df['date']).dt.year)
-        .groupby('year')['ndvi']
-        .mean()
-        .dropna()
-    )
-
-    crop_area_yearly = (
-        crop_df.assign(year=pd.to_datetime(crop_df['date']).dt.year)
-        .groupby('year')['crop_area_hectares']
-        .mean()
-        .dropna()
-    )
-
-    common_years = sorted(set(ndvi_yearly.index).intersection(crop_area_yearly.index))
-    if not common_years:
-        return pd.DataFrame()
-
-    per_year_rankings: list[pd.DataFrame] = []
-    for year in common_years:
-        mean_ndvi_year = float(ndvi_yearly.loc[year])
-        reference_area_year = float(crop_area_yearly.loc[year])
-        if reference_area_year <= 0 or math.isnan(reference_area_year) or math.isnan(mean_ndvi_year):
-            continue
-        ranking = estimate_crop_size_ranking(mean_ndvi_year, reference_area_year)
-        if ranking.empty:
-            continue
-        ranking.insert(0, 'Year', int(year))
-        per_year_rankings.append(ranking)
-
-    if not per_year_rankings:
-        return pd.DataFrame()
-
-    per_year_df = pd.concat(per_year_rankings, ignore_index=True)
-
-    summary = (
-        per_year_df
-        .groupby('Crop')
-        .agg({
-            'Estimated area (ha)': 'mean',
-            'Estimated yield (t)': 'mean',
-            'Match': 'mean',
-            'Match floor': lambda col: 'Yes' if (col == 'Yes').any() else 'No',
-            'Year': lambda col: sorted(set(int(v) for v in col)),
-        })
-        .reset_index()
-    )
-
-    if summary.empty:
-        return summary
-
-    summary['Years included'] = summary['Year'].apply(lambda years: ', '.join(str(y) for y in years))
-    summary['Year count'] = summary['Year'].apply(len)
-    summary = summary.drop(columns=['Year'])
-    summary = summary.rename(columns={
-        'Match': 'NDVI match',
-        'Match floor': 'Match floor applied',
-    })
-
-    summary['Match floor applied'] = summary['Match floor applied'].astype(str)
-    summary.sort_values(by='Estimated yield (t)', ascending=False, inplace=True)
-    summary.reset_index(drop=True, inplace=True)
-    return summary
-@st.cache_data(ttl=3600)
 def fetch_weather_history(lat: float, lon: float, start_date: datetime, end_date: datetime) -> pd.DataFrame:
     start_str = start_date.strftime("%Y-%m-%d")
     end_str = end_date.strftime("%Y-%m-%d")
@@ -1069,8 +1101,10 @@ if search_button:
 
                 results: List[Dict[str, Any]] = []
                 row_tuples = list(df.itertuples(index=False))
+                index_types = [IndexType.NDVI, IndexType.EVI]
+                
                 if row_tuples:
-                    worker = partial(compute_ndvi_for_row, bbox=bbox, token=earthdata_token)
+                    worker = partial(compute_index_for_row, index_types=index_types, bbox=bbox, token=earthdata_token)
                     max_workers = min(8, len(row_tuples))
                     try:
                         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -1110,7 +1144,6 @@ if search_button:
 
                 if results:
                     ndvi_df = pd.DataFrame(results).sort_values('date')
-                    mean_ndvi = float(ndvi_df['ndvi'].mean()) if not ndvi_df.empty else float('nan')
 
                     weather_df = pd.DataFrame()
                     if center_latitude is not None and center_longitude is not None:
@@ -1120,12 +1153,25 @@ if search_button:
                     fig.add_trace(
                         go.Scatter(
                             x=ndvi_df['date'],
-                            y=ndvi_df['ndvi'],
+                            y=ndvi_df['mean_NDVI'],
                             mode="lines+markers",
                             name="NDVI",
                             line=dict(color="green", width=2),
                             marker=dict(size=8),
                             hovertemplate="<b>Date:</b> %{x}<br><b>NDVI:</b> %{y:.3f}<extra></extra>",
+                        ),
+                        secondary_y=False,
+                    )
+
+                    fig.add_trace(
+                        go.Scatter(
+                            x=ndvi_df['date'],
+                            y=ndvi_df['mean_EVI'],
+                            mode="lines+markers",
+                            name="EVI",
+                            line=dict(color="blue", width=2),
+                            marker=dict(size=8),
+                            hovertemplate="<b>Date:</b> %{x}<br><b>EVI:</b> %{y:.3f}<extra></extra>",
                         ),
                         secondary_y=False,
                     )
@@ -1197,11 +1243,24 @@ if search_button:
                     if not weather_df.empty:
                         st.caption("Weather source: Open-Meteo archive (daily means).")
 
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Mean NDVI", f"{ndvi_df['mean_NDVI'].mean():.3f}")
+                    with col2:
+                        st.metric("Max NDVI", f"{ndvi_df['mean_NDVI'].max():.3f}")
+                    with col3:
+                        st.metric("Min NDVI", f"{ndvi_df['mean_NDVI'].min():.3f}")
+                    with col4:
+                        st.metric("Std. dev.", f"{ndvi_df['mean_NDVI'].std():.3f}")
+
+                    if ndvi_df['mean_NDVI'].min() < 0:
+                        st.info("Negative NDVI values typically indicate open water, clouds, or other non-vegetation surfaces within the AOI.")
+
+                    mean_ndvi = float(ndvi_df['mean_NDVI'].mean()) if not ndvi_df.empty else float('nan')
+
                     monthly_ndvi = (
-                        ndvi_df.assign(
-                            month_number=pd.to_datetime(ndvi_df['date']).dt.month
-                        )
-                        .groupby('month_number')['ndvi']
+                        ndvi_df.assign(month_number=pd.to_datetime(ndvi_df['date']).dt.month)
+                        .groupby('month_number')['mean_NDVI']
                         .agg(['mean', 'median'])
                         .reset_index()
                         .sort_values('month_number')
@@ -1281,7 +1340,6 @@ if search_button:
                             )
 
                         yearly_rankings = build_yearly_crop_rankings(ndvi_df, crop_df)
-
                         if not yearly_rankings.empty:
                             area_source = yearly_rankings.sort_values('Estimated area (ha)', ascending=False)
                             area_fig = go.Figure()
@@ -1347,20 +1405,7 @@ if search_button:
                                 display_columns = ['Crop', 'Estimated area (ha)', 'Estimated yield (t)', 'NDVI match', 'Match floor applied', 'Years included', 'Year count']
                                 st.dataframe(pretty_df[display_columns], hide_index=True, use_container_width=True)
                         else:
-                            st.info("Multi-year crop rankings are unavailable – insufficient NDVI or crop area data across years.")
-
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Mean NDVI", f"{ndvi_df['ndvi'].mean():.3f}")
-                    with col2:
-                        st.metric("Max NDVI", f"{ndvi_df['ndvi'].max():.3f}")
-                    with col3:
-                        st.metric("Min NDVI", f"{ndvi_df['ndvi'].min():.3f}")
-                    with col4:
-                        st.metric("Std. dev.", f"{ndvi_df['ndvi'].std():.3f}")
-
-                    if ndvi_df['ndvi'].min() < 0:
-                        st.info("Negative NDVI values typically indicate open water, clouds, or other non-vegetation surfaces within the AOI.")
+                            st.info("Multi-year crop rankings are unavailable - insufficient NDVI or crop area data across years.")
 
                     if not math.isnan(mean_ndvi):
                         if mean_ndvi < 0.2:
@@ -1371,6 +1416,7 @@ if search_button:
                             st.success("**Healthy canopy** - vigorous vegetative growth and photosynthesis")
                         else:
                             st.info("**Very dense canopy** - peak foliage; watch for lodging, pests, or late-season disease pressure")
+
                 else:
                     st.error("Could not compute NDVI for the retrieved scenes")
 
@@ -1504,7 +1550,7 @@ else:
 
     **What you can do with this app:**
     - Retrieve HLS (Harmonized Landsat Sentinel-2) imagery at 30 m resolution
-    - Analyse NDVI time series to track potato canopy vigor
+    - Analyse NDVI time series to track canopy vigor
     - Compare management zones across multiple observation dates
 
     **To get started:**
