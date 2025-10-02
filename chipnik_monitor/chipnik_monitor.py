@@ -23,6 +23,7 @@ import json
 import logging
 import concurrent.futures
 import math
+import calendar
 import os
 import time
 from typing import List, Tuple, Optional, Union, Dict, Any
@@ -45,7 +46,7 @@ DEFAULT_MIN_LAT = DEFAULT_CENTER_LAT - DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_MAX_LAT = DEFAULT_CENTER_LAT + DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_RADIUS_KM = 6.0
 
-APP_NAME = "Potato Crop Monitor"
+APP_NAME = "HLS Crop Monitor"
 APP_LOGO_PATH = Path("media") / "small_logo.png"
 
 def extract_geometry_from_geojson(geojson_obj: dict) -> BaseGeometry:
@@ -312,8 +313,8 @@ if APP_LOGO_PATH.exists():
     st.image(str(APP_LOGO_PATH), width=96)
 
 # Page title
-st.title(f"{APP_NAME} - HLS NDVI Analysis")
-st.markdown("**Assess potato crop health with HLS (Harmonized Landsat Sentinel-2) imagery**")
+st.title(f"{APP_NAME} - NDVI Analysis")
+st.markdown("**Assess crop canopy health with HLS (Harmonized Landsat Sentinel-2) imagery**")
 
 # Sidebar controls
 
@@ -1117,6 +1118,54 @@ if search_button:
                     if not weather_df.empty:
                         st.caption("Weather source: Open-Meteo archive (daily means).")
 
+                    monthly_ndvi = (
+                        ndvi_df.assign(
+                            month_number=pd.to_datetime(ndvi_df['date']).dt.month
+                        )
+                        .groupby('month_number')['ndvi']
+                        .agg(['mean', 'median'])
+                        .reset_index()
+                        .sort_values('month_number')
+                    )
+                    if not monthly_ndvi.empty:
+                        monthly_ndvi['month_name'] = monthly_ndvi['month_number'].apply(lambda m: calendar.month_abbr[m])
+                        monthly_fig = go.Figure()
+                        monthly_fig.add_trace(
+                            go.Scatter(
+                                x=monthly_ndvi['month_name'],
+                                y=monthly_ndvi['mean'],
+                                name="Monthly mean NDVI",
+                                mode="lines+markers",
+                                marker=dict(size=8),
+                                line=dict(color="#2c7fb8", width=2),
+                                hovertemplate="<b>Month:</b> %{x}<br><b>Mean NDVI:</b> %{y:.3f}<extra></extra>",
+                            )
+                        )
+                        monthly_fig.add_trace(
+                            go.Scatter(
+                                x=monthly_ndvi['month_name'],
+                                y=monthly_ndvi['median'],
+                                name="Monthly median NDVI",
+                                mode="lines+markers",
+                                marker=dict(size=8),
+                                line=dict(color="#7fcdbb", width=2, dash="dash"),
+                                hovertemplate="<b>Month:</b> %{x}<br><b>Median NDVI:</b> %{y:.3f}<extra></extra>",
+                            )
+                        )
+                        monthly_fig.update_layout(
+                            title="Monthly NDVI summary",
+                            xaxis_title="Month",
+                            yaxis_title="NDVI",
+                            height=420,
+                            hovermode="x unified",
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                        )
+                        monthly_fig.update_xaxes(
+                            categoryorder="array",
+                            categoryarray=[calendar.month_abbr[m] for m in range(1, 13)]
+                        )
+                        st.plotly_chart(monthly_fig, use_container_width=True)
+
                     crop_df = pd.DataFrame()
                     if 'crop_percent' in ndvi_df.columns:
                         crop_df = ndvi_df.dropna(subset=['crop_percent'])
@@ -1231,11 +1280,11 @@ if search_button:
 
                     if not math.isnan(mean_ndvi):
                         if mean_ndvi < 0.2:
-                            st.error("**Severely stressed potatoes** - bare soil, standing water, or senescing vines")
+                            st.error("**Severely stressed canopy** - bare soil, standing water, or senescing vegetation")
                         elif mean_ndvi < 0.4:
-                            st.warning("**Early canopy development** - emergence or sparse foliage; monitor inputs closely")
+                            st.warning("**Early canopy development** - sparse foliage; monitor crop inputs closely")
                         elif mean_ndvi < 0.6:
-                            st.success("**Healthy potato canopy** - vigorous vegetative growth and photosynthesis")
+                            st.success("**Healthy canopy** - vigorous vegetative growth and photosynthesis")
                         else:
                             st.info("**Very dense canopy** - peak foliage; watch for lodging, pests, or late-season disease pressure")
                 else:
@@ -1367,7 +1416,7 @@ if search_button:
 else:
     # First-run instructions
     st.info("""
-    ### Welcome to Potato Crop Monitor!
+    ### Welcome to HLS Crop Monitor!
 
     **What you can do with this app:**
     - Retrieve HLS (Harmonized Landsat Sentinel-2) imagery at 30 m resolution
@@ -1380,8 +1429,8 @@ else:
     3. Choose the time range
     4. Select "Search scenes"
 
-    **NDVI interpretation for potatoes:**
-    - < 0.2: Bare soil, standing water, or senescing vines
+    **NDVI interpretation guidance:**
+    - < 0.2: Bare soil, standing water, or senescing vegetation
     - 0.2-0.4: Emerging canopy or stressed plants
     - 0.4-0.6: Healthy vegetative growth
     - > 0.6: Peak foliage; monitor for disease and nutrient demand
@@ -1417,7 +1466,7 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: gray;'>
-    <p>Potato Crop Monitor v1.0 | Data source: NASA HLS v2.0 | Built with Streamlit</p>
+    <p>HLS Crop Monitor v1.0 | Data source: NASA HLS v2.0 | Built with Streamlit</p>
     <p><small>Data provided by NASA LP DAAC via the CMR-STAC API</small></p>
 </div>
 """, unsafe_allow_html=True)
