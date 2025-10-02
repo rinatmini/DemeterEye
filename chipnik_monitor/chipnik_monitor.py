@@ -117,6 +117,39 @@ HLS_PIXEL_AREA_SQM = HLS_PIXEL_RESOLUTION_METERS ** 2
 # Treat NDVI >= 0.35 as photosynthetically active canopy (crop/biomass) coverage.
 CROP_NDVI_THRESHOLD = 0.35
 
+CROP_PROFILES = (
+    {
+        "name": "Potato",
+        "ndvi_optimal": 0.65,
+        "ndvi_tolerance": 0.25,
+        "yield_t_per_ha": 45.0,
+    },
+    {
+        "name": "Soybean",
+        "ndvi_optimal": 0.60,
+        "ndvi_tolerance": 0.25,
+        "yield_t_per_ha": 3.5,
+    },
+    {
+        "name": "Wheat",
+        "ndvi_optimal": 0.55,
+        "ndvi_tolerance": 0.20,
+        "yield_t_per_ha": 6.0,
+    },
+    {
+        "name": "Tomato",
+        "ndvi_optimal": 0.68,
+        "ndvi_tolerance": 0.22,
+        "yield_t_per_ha": 70.0,
+    },
+    {
+        "name": "Sugar beet",
+        "ndvi_optimal": 0.70,
+        "ndvi_tolerance": 0.18,
+        "yield_t_per_ha": 55.0,
+    },
+)
+
 def get_ndvi_cache_path(red_url: str, nir_url: str, bbox: List[float]) -> Path:
     payload = json.dumps(
         {
@@ -794,6 +827,40 @@ def compute_ndvi_for_row(row: Tuple, bbox: List[float], token: str) -> Dict[str,
         "crop_area_hectares": stats.get("crop_area_hectares"),
         "total_area_hectares": stats.get("total_area_hectares"),
     }
+
+
+def estimate_crop_size_ranking(mean_ndvi: float, reference_area_ha: float) -> pd.DataFrame:
+    """Estimate feasible crop areas for multiple crop types using NDVI heuristics."""
+
+    if reference_area_ha <= 0 or math.isnan(reference_area_ha) or math.isnan(mean_ndvi):
+        return pd.DataFrame()
+
+    rows = []
+    for profile in CROP_PROFILES:
+        tolerance = profile.get("ndvi_tolerance", 0.25)
+        yield_t_per_ha = profile.get("yield_t_per_ha")
+        if tolerance <= 0:
+            continue
+        match_ratio = 1.0 - abs(mean_ndvi - profile["ndvi_optimal"]) / tolerance
+        match_ratio = max(0.0, min(1.0, match_ratio))
+        estimated_area = reference_area_ha * match_ratio
+        if yield_t_per_ha is None or yield_t_per_ha <= 0:
+            continue
+        estimated_yield = estimated_area * yield_t_per_ha
+        rows.append({
+            "Crop": profile["name"],
+            "Match": match_ratio,
+            "Estimated area (ha)": estimated_area,
+            "Estimated yield (t)": estimated_yield,
+        })
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df.sort_values(by="Estimated yield (t)", ascending=False, inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    return df
 @st.cache_data(ttl=3600)
 def fetch_weather_history(lat: float, lon: float, start_date: datetime, end_date: datetime) -> pd.DataFrame:
     start_str = start_date.strftime("%Y-%m-%d")
@@ -962,6 +1029,7 @@ if search_button:
 
                 if results:
                     ndvi_df = pd.DataFrame(results).sort_values('date')
+                    mean_ndvi = float(ndvi_df['ndvi'].mean()) if not ndvi_df.empty else float('nan')
 
                     weather_df = pd.DataFrame()
                     if center_latitude is not None and center_longitude is not None:
@@ -1083,6 +1151,70 @@ if search_button:
                                 f"({latest_crop['crop_percent']:.1f}% of {total_area:.1f} ha AOI)."
                             )
 
+                        mean_crop_area = crop_df['crop_area_hectares'].mean()
+                        max_crop_area = crop_df['crop_area_hectares'].max()
+                        reference_area = float(np.nanmean([mean_crop_area, max_crop_area]))
+                        crop_size_df = estimate_crop_size_ranking(mean_ndvi, reference_area)
+
+                        if not crop_size_df.empty:
+                            area_df = crop_size_df.sort_values(by="Estimated area (ha)", ascending=False)
+                            area_fig = go.Figure()
+                            area_fig.add_trace(
+                                go.Bar(
+                                    y=area_df['Crop'],
+                                    x=area_df['Estimated area (ha)'],
+                                    orientation='h',
+                                    marker_color="#2e8b57",
+                                    hovertemplate=(
+                                        "<b>%{y}</b><br>Estimated area: %{x:.1f} ha"
+                                        "<br>NDVI match: %{customdata[0]:.0%}"
+                                        "<br>Estimated yield: %{customdata[1]:.1f} t<extra></extra>"
+                                    ),
+                                    customdata=area_df[['Match', 'Estimated yield (t)']].to_numpy(),
+                                )
+                            )
+                            area_fig.update_layout(
+                                title="Crop size ranking (area)",
+                                xaxis_title="Estimated feasible area (ha)",
+                                yaxis_title="Crop",
+                                height=420,
+                                margin=dict(l=120, r=40, t=80, b=60),
+                            )
+                            st.plotly_chart(area_fig, use_container_width=True)
+
+                            yield_df = crop_size_df.sort_values(by="Estimated yield (t)", ascending=False)
+                            yield_fig = go.Figure()
+                            yield_fig.add_trace(
+                                go.Bar(
+                                    y=yield_df['Crop'],
+                                    x=yield_df['Estimated yield (t)'],
+                                    orientation='h',
+                                    marker_color="#556b2f",
+                                    hovertemplate=(
+                                        "<b>%{y}</b><br>Estimated yield: %{x:.1f} t"
+                                        "<br>NDVI match: %{customdata[0]:.0%}"
+                                        "<br>Area basis: %{customdata[1]:.1f} ha<extra></extra>"
+                                    ),
+                                    customdata=yield_df[['Match', 'Estimated area (ha)']].to_numpy(),
+                                )
+                            )
+                            yield_fig.update_layout(
+                                title="Crop yield ranking (heuristic)",
+                                xaxis_title="Estimated yield (t)",
+                                yaxis_title="Crop",
+                                height=420,
+                                margin=dict(l=120, r=40, t=80, b=60),
+                            )
+                            st.plotly_chart(yield_fig, use_container_width=True)
+
+                            with st.expander("Crop ranking details", expanded=False):
+                                pretty_df = crop_size_df.copy()
+                                pretty_df['Match'] = pretty_df['Match'].map(lambda v: f"{v:.0%}")
+                                for column in ('Estimated area (ha)', 'Estimated yield (t)'):
+                                    pretty_df[column] = pretty_df[column].map(lambda v: f"{v:.1f}")
+                                pretty_df.rename(columns={'Match': 'NDVI match'}, inplace=True)
+                                st.dataframe(pretty_df, hide_index=True, use_container_width=True)
+
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
                         st.metric("Mean NDVI", f"{ndvi_df['ndvi'].mean():.3f}")
@@ -1096,15 +1228,15 @@ if search_button:
                     if ndvi_df['ndvi'].min() < 0:
                         st.info("Negative NDVI values typically indicate open water, clouds, or other non-vegetation surfaces within the AOI.")
 
-                    mean_ndvi = ndvi_df['ndvi'].mean()
-                    if mean_ndvi < 0.2:
-                        st.error("**Severely stressed potatoes** - bare soil, standing water, or senescing vines")
-                    elif mean_ndvi < 0.4:
-                        st.warning("**Early canopy development** - emergence or sparse foliage; monitor inputs closely")
-                    elif mean_ndvi < 0.6:
-                        st.success("**Healthy potato canopy** - vigorous vegetative growth and photosynthesis")
-                    else:
-                        st.info("**Very dense canopy** - peak foliage; watch for lodging, pests, or late-season disease pressure")
+                    if not math.isnan(mean_ndvi):
+                        if mean_ndvi < 0.2:
+                            st.error("**Severely stressed potatoes** - bare soil, standing water, or senescing vines")
+                        elif mean_ndvi < 0.4:
+                            st.warning("**Early canopy development** - emergence or sparse foliage; monitor inputs closely")
+                        elif mean_ndvi < 0.6:
+                            st.success("**Healthy potato canopy** - vigorous vegetative growth and photosynthesis")
+                        else:
+                            st.info("**Very dense canopy** - peak foliage; watch for lodging, pests, or late-season disease pressure")
                 else:
                     st.error("Could not compute NDVI for the retrieved scenes")
 
