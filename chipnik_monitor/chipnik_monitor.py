@@ -111,6 +111,12 @@ CACHE_ROOT = Path(".cache")
 NDVI_CACHE_DIR = CACHE_ROOT / "ndvi"
 NDVI_CACHE_VERSION = "1"
 
+# HLS products have 30 m ground sampling distance; used to convert pixels to area.
+HLS_PIXEL_RESOLUTION_METERS = 30.0
+HLS_PIXEL_AREA_SQM = HLS_PIXEL_RESOLUTION_METERS ** 2
+# Treat NDVI >= 0.35 as photosynthetically active canopy (crop/biomass) coverage.
+CROP_NDVI_THRESHOLD = 0.35
+
 def get_ndvi_cache_path(red_url: str, nir_url: str, bbox: List[float]) -> Path:
     payload = json.dumps(
         {
@@ -403,10 +409,10 @@ with st.sidebar:
 
     days_back = st.slider(
         "Days back",
-        min_value=7,
-        max_value=1800,
-        value=90,
-        step=7
+        min_value=100,
+        max_value=4500,
+        value=365,
+        step=30
     )
 
     start_date = end_date - timedelta(days=days_back)
@@ -530,9 +536,46 @@ def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
         st.error(f"Search error: {e}")
         return pd.DataFrame()
 
+def summarise_ndvi_stats(ndvi: np.ma.MaskedArray, mean_ndvi: float) -> Dict[str, float]:
+    """Derive crop-cover metrics from an NDVI raster."""
+
+    if ndvi is None or ndvi.size == 0:
+        return {
+            "mean_ndvi": float("nan"),
+            "crop_fraction": float("nan"),
+            "crop_percent": float("nan"),
+            "crop_area_hectares": float("nan"),
+            "total_area_hectares": float("nan"),
+        }
+
+    valid_values = ndvi.compressed()
+    valid_pixels = int(valid_values.size)
+    if valid_pixels == 0:
+        return {
+            "mean_ndvi": mean_ndvi,
+            "crop_fraction": float("nan"),
+            "crop_percent": float("nan"),
+            "crop_area_hectares": float("nan"),
+            "total_area_hectares": float("nan"),
+        }
+
+    crop_pixels = int(np.count_nonzero(valid_values >= CROP_NDVI_THRESHOLD))
+    crop_fraction = crop_pixels / valid_pixels if valid_pixels else float("nan")
+    crop_area_hectares = (crop_pixels * HLS_PIXEL_AREA_SQM) / 10000.0
+    total_area_hectares = (valid_pixels * HLS_PIXEL_AREA_SQM) / 10000.0
+
+    return {
+        "mean_ndvi": mean_ndvi,
+        "crop_fraction": crop_fraction,
+        "crop_percent": crop_fraction * 100.0,
+        "crop_area_hectares": crop_area_hectares,
+        "total_area_hectares": total_area_hectares,
+    }
+
+
 def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
-                             token: str) -> Tuple[np.ndarray, float]:
-    """Compute NDVI from two COG asset URLs"""
+                             token: str) -> Tuple[Optional[np.ma.MaskedArray], Dict[str, float]]:
+    """Compute NDVI from two COG asset URLs and derive summary metrics."""
 
     logger.info(
         "calculate_ndvi_from_urls: red_url=%s nir_url=%s bbox=%s token_provided=%s",
@@ -547,7 +590,7 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
     except ValueError:
         logger.exception("NDVI calculation received invalid bbox")
         st.warning("NDVI calculation error: invalid bounding box")
-        return None, None
+        return None, {}
 
     cache_path = get_ndvi_cache_path(red_url, nir_url, bbox)
 
@@ -559,7 +602,8 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
                 mean_ndvi = float(cached["mean"].item())
             ndvi = np.ma.array(ndvi_data, mask=mask)
             logger.debug("Loaded NDVI from cache for %s", cache_path.name)
-            return ndvi, mean_ndvi
+            stats = summarise_ndvi_stats(ndvi, mean_ndvi)
+            return ndvi, stats
         except Exception:
             logger.exception("Failed to load NDVI cache from %s", cache_path)
             try:
@@ -641,7 +685,7 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
             with rasterio.open(red_url) as red_src:
                 red_window = _window_from_bbox(red_src)
                 if red_window is None:
-                    return None, None
+                    return None, {}
                 red = red_src.read(1, window=red_window, masked=True)
                 logger.debug("Read red band with shape %s", getattr(red, 'shape', None))
 
@@ -649,7 +693,7 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
             with rasterio.open(nir_url) as nir_src:
                 nir_window = _window_from_bbox(nir_src)
                 if nir_window is None:
-                    return None, None
+                    return None, {}
                 nir = nir_src.read(1, window=nir_window, masked=True)
                 logger.debug("Read NIR band with shape %s", getattr(nir, 'shape', None))
 
@@ -659,7 +703,7 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
                 red.size,
                 nir.size
             )
-            return None, None
+            return None, {}
 
         if red.shape != nir.shape:
             logger.warning(
@@ -669,7 +713,7 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
                 red.shape,
                 nir.shape
             )
-            return None, None
+            return None, {}
 
         red_data = red.astype("float32")
         nir_data = nir.astype("float32")
@@ -681,10 +725,11 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
         ndvi = np.ma.array(ndvi, mask=combined_mask)
         if ndvi.count() == 0:
             logger.warning("NDVI computation has no valid pixels for %s", red_url)
-            return None, None
+            return None, {}
 
         mean_ndvi = float(ndvi.mean())
         logger.info("calculate_ndvi_from_urls: mean NDVI=%.4f", mean_ndvi)
+        stats = summarise_ndvi_stats(ndvi, mean_ndvi)
 
         try:
             ndvi_to_store = ndvi.filled(np.nan).astype("float32")
@@ -699,12 +744,12 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
         except Exception:
             logger.exception("Failed to persist NDVI cache at %s", cache_path)
 
-        return ndvi, mean_ndvi
+        return ndvi, stats
 
     except Exception as e:
         logger.exception("NDVI calculation failed")
         st.warning(f"NDVI calculation error: {e}")
-        return None, None
+        return None, {}
 
 
 
@@ -731,8 +776,12 @@ def compute_ndvi_for_row(row: Tuple, bbox: List[float], token: str) -> Dict[str,
 
     logger.debug("Submitting NDVI task for scene=%s", scene_id)
 
-    _, mean_ndvi = calculate_ndvi_from_urls(red_url, nir_url, bbox, token)
-    if mean_ndvi is None:
+    _, stats = calculate_ndvi_from_urls(red_url, nir_url, bbox, token)
+    if not stats:
+        return {}
+
+    mean_ndvi = stats.get("mean_ndvi")
+    if mean_ndvi is None or (isinstance(mean_ndvi, float) and math.isnan(mean_ndvi)):
         return {}
 
     return {
@@ -740,6 +789,10 @@ def compute_ndvi_for_row(row: Tuple, bbox: List[float], token: str) -> Dict[str,
         "ndvi": mean_ndvi,
         "cloud_cover": data.get("cloud_cover"),
         "collection": data.get("collection"),
+        "crop_percent": stats.get("crop_percent"),
+        "crop_fraction": stats.get("crop_fraction"),
+        "crop_area_hectares": stats.get("crop_area_hectares"),
+        "total_area_hectares": stats.get("total_area_hectares"),
     }
 @st.cache_data(ttl=3600)
 def fetch_weather_history(lat: float, lon: float, start_date: datetime, end_date: datetime) -> pd.DataFrame:
@@ -994,6 +1047,41 @@ if search_button:
                     st.plotly_chart(fig, use_container_width=True)
                     if not weather_df.empty:
                         st.caption("Weather source: Open-Meteo archive (daily means).")
+
+                    crop_df = pd.DataFrame()
+                    if 'crop_percent' in ndvi_df.columns:
+                        crop_df = ndvi_df.dropna(subset=['crop_percent'])
+
+                    if not crop_df.empty:
+                        crop_fig = go.Figure()
+                        crop_fig.add_trace(
+                            go.Bar(
+                                x=crop_df['date'],
+                                y=crop_df['crop_percent'],
+                                name="Crop cover (%)",
+                                marker_color="#228B22",
+                                hovertemplate="<b>Date:</b> %{x}<br><b>Crop cover:</b> %{y:.1f}%<extra></extra>",
+                            )
+                        )
+                        crop_fig.update_yaxes(title_text="Crop cover (% of AOI)", range=[0, 100])
+                        crop_fig.update_layout(
+                            title="Estimated crop-covered area",
+                            xaxis_title="Date",
+                            height=420,
+                            showlegend=False,
+                        )
+                        st.plotly_chart(crop_fig, use_container_width=True)
+
+                        latest_crop = crop_df.iloc[-1]
+                        latest_timestamp = pd.to_datetime(latest_crop['date']) if pd.notna(latest_crop['date']) else None
+                        latest_date_str = latest_timestamp.strftime("%Y-%m-%d") if latest_timestamp is not None else "N/A"
+                        crop_area = latest_crop.get('crop_area_hectares')
+                        total_area = latest_crop.get('total_area_hectares')
+                        if pd.notna(crop_area) and pd.notna(total_area):
+                            st.caption(
+                                f"Estimated crop biomass footprint on {latest_date_str}: {crop_area:.1f} ha "
+                                f"({latest_crop['crop_percent']:.1f}% of {total_area:.1f} ha AOI)."
+                            )
 
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
