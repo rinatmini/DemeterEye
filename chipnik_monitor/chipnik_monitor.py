@@ -29,7 +29,7 @@ from typing import List, Tuple, Optional, Union, Dict, Any
 import warnings
 warnings.filterwarnings("ignore")
 # Configure logger
-logger = logging.getLogger('bloom_monitor')
+logger = logging.getLogger('chipnik_monitor')
 if not logger.handlers:
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter('%(levelname)s:%(name)s:%(message)s'))
