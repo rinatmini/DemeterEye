@@ -1,0 +1,53 @@
+# --- Env & secrets ---
+.env
+.env.*
+*.env
+*.env.*
+!.env.example
+
+# TLS/keys just in case
+*.pem
+*.key
+*.crt
+
+# --- Go build artifacts ---
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.a
+*.cgo1.go
+*.cgo2.c
+*.prof
+*.pprof
+
+# Go workspaces (optional to commit)
+go.work
+go.work.sum
+
+# Caches / temp
+*.log
+*.pid
+*.tmp
+*.cache
+
+# Coverage
+cover*.out
+coverage*.out
+
+# Binaries / builds
+/bin/
+/build/
+/dist/
+
+# --- IDE / OS junk ---
+.DS_Store
+.vscode/
+.idea/
+*.code-workspace
+
+# Swap files
+*~
+*.swp
