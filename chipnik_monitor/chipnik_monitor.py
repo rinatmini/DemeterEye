@@ -1,3 +1,4 @@
+from pyparsing import Enum
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -108,20 +109,24 @@ def list_geojson_files(directory: Path) -> List[Path]:
     return sorted(unique.values(), key=lambda f: f.name.lower())
 
 CACHE_ROOT = Path(".cache")
-NDVI_CACHE_DIR = CACHE_ROOT / "ndvi"
-NDVI_CACHE_VERSION = "1"
+INDEX_CACHE_VERSION = "1"
 
-def get_ndvi_cache_path(red_url: str, nir_url: str, bbox: List[float]) -> Path:
+class IndexType(Enum):
+    NDVI = 1
+    EVI = 2
+
+def get_index_cache_path(index_type: IndexType, red_url: str, blue_url: str, nir_url: str, bbox: List[float]) -> Path:
     payload = json.dumps(
         {
             "red": red_url,
+            "blue": blue_url,
             "nir": nir_url,
             "bbox": [round(float(coord), 6) for coord in bbox],
-            "version": NDVI_CACHE_VERSION
+            "version": INDEX_CACHE_VERSION
         },
         sort_keys=True
     )
-    cache_dir = NDVI_CACHE_DIR
+    cache_dir = CACHE_ROOT / index_type.name
     cache_dir.mkdir(parents=True, exist_ok=True)
     key = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return cache_dir / f"{key}.npz"
@@ -211,7 +216,8 @@ def store_stac_cache(cache_path: Path, records: List[dict]) -> None:
                 "cloud_cover": cloud_cover,
                 "collection": record.get("collection"),
                 "nir_url": record.get("nir_url"),
-                "red_url": record.get("red_url")
+                "red_url": record.get("red_url"),
+                "blue_url": record.get("blue_url"),
             })
 
         cache_path.write_text(json.dumps({"records": serialisable}), encoding="utf-8")
@@ -500,11 +506,13 @@ def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
 
             nir_asset = item.assets.get('B8A') or item.assets.get('B05')
             red_asset = item.assets.get('B04')
+            blue_asset = item.assets.get('B02')
 
             nir_url = getattr(nir_asset, 'href', None)
             red_url = getattr(red_asset, 'href', None)
-            if not nir_url or not red_url:
-                logger.debug("Skipping item %s: missing required bands (red=%s, nir=%s)", item.id, bool(red_url), bool(nir_url))
+            blue_url = getattr(blue_asset, 'href', None)
+            if not nir_url or not red_url or not blue_url:
+                logger.debug("Skipping item %s: missing required bands (red=%s, nir=%s, blue=%s)", item.id, bool(red_url), bool(nir_url), bool(blue_url))
                 continue
 
             records.append({
@@ -513,7 +521,8 @@ def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
                 "cloud_cover": float(cloud_cover),
                 "collection": item.collection_id,
                 "nir_url": nir_url,
-                "red_url": red_url
+                "red_url": red_url,
+                "blue_url": blue_url
             })
             logger.debug("Kept item %s (collection=%s)", item.id, item.collection_id)
 
@@ -530,13 +539,15 @@ def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
         st.error(f"Search error: {e}")
         return pd.DataFrame()
 
-def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
+
+def calculate_index_from_urls(index_type: IndexType, red_url: str, blue_url: str, nir_url: str, bbox: List[float],
                              token: str) -> Tuple[np.ndarray, float]:
-    """Compute NDVI from two COG asset URLs"""
+    """Compute vegetation index from two COG asset URLs"""
 
     logger.info(
-        "calculate_ndvi_from_urls: red_url=%s nir_url=%s bbox=%s token_provided=%s",
+        "calculate_index_from_urls: red_url=%s blue_url=%s nir_url=%s bbox=%s token_provided=%s",
         red_url,
+        blue_url,
         nir_url,
         bbox,
         bool(token)
@@ -545,23 +556,23 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
     try:
         bbox = normalize_bbox(bbox)
     except ValueError:
-        logger.exception("NDVI calculation received invalid bbox")
-        st.warning("NDVI calculation error: invalid bounding box")
+        logger.exception("Vegetation index calculation received invalid bbox")
+        st.warning("Vegetation index calculation error: invalid bounding box")
         return None, None
 
-    cache_path = get_ndvi_cache_path(red_url, nir_url, bbox)
+    cache_path = get_index_cache_path(index_type, red_url, blue_url, nir_url, bbox)
 
     if cache_path.exists():
         try:
             with np.load(cache_path, allow_pickle=False) as cached:
-                ndvi_data = cached["ndvi"]
+                index_data = cached[index_type.name]
                 mask = cached["mask"]
-                mean_ndvi = float(cached["mean"].item())
-            ndvi = np.ma.array(ndvi_data, mask=mask)
-            logger.debug("Loaded NDVI from cache for %s", cache_path.name)
-            return ndvi, mean_ndvi
+                mean_index = float(cached["mean"].item())
+            masked_data = np.ma.array(index_data, mask=mask)
+            logger.debug("Loaded index data from cache for %s", cache_path.name)
+            return masked_data, mean_index
         except Exception:
-            logger.exception("Failed to load NDVI cache from %s", cache_path)
+            logger.exception("Failed to load index data cache from %s", cache_path)
             try:
                 cache_path.unlink()
             except FileNotFoundError:
@@ -645,6 +656,14 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
                 red = red_src.read(1, window=red_window, masked=True)
                 logger.debug("Read red band with shape %s", getattr(red, 'shape', None))
 
+            logger.debug("Opening blue band %s", blue_url)
+            with rasterio.open(blue_url) as blue_src:
+                blue_window = _window_from_bbox(blue_src)
+                if blue_window is None:
+                    return None, None
+                blue = blue_src.read(1, window=blue_window, masked=True)
+                logger.debug("Read blue band with shape %s", getattr(blue, 'shape', None))
+
             logger.debug("Opening NIR band %s", nir_url)
             with rasterio.open(nir_url) as nir_src:
                 nir_window = _window_from_bbox(nir_src)
@@ -661,61 +680,72 @@ def calculate_ndvi_from_urls(red_url: str, nir_url: str, bbox: List[float],
             )
             return None, None
 
-        if red.shape != nir.shape:
+        if red.shape != nir.shape or red.shape != blue.shape:
             logger.warning(
-                "Band windows differ in shape for %s vs %s: %s vs %s",
+                "Band windows differ in shape for %s vs %s vs %s: %s vs %s vs %s",
                 red_url,
+                blue_url,
                 nir_url,
                 red.shape,
+                blue.shape,
                 nir.shape
             )
             return None, None
 
         red_data = red.astype("float32")
+        blue_data = blue.astype("float32")
         nir_data = nir.astype("float32")
 
-        with np.errstate(divide='ignore', invalid='ignore'):
-            ndvi = (nir_data - red_data) / (nir_data + red_data)
+        match index_type:
+            case IndexType.NDVI:
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    ndvi = (nir_data - red_data) / (nir_data + red_data)
 
-        combined_mask = np.ma.getmaskarray(red) | np.ma.getmaskarray(nir)
-        ndvi = np.ma.array(ndvi, mask=combined_mask)
-        if ndvi.count() == 0:
+                combined_mask = np.ma.getmaskarray(red) | np.ma.getmaskarray(nir)
+                masked_data = np.ma.array(ndvi, mask=combined_mask)
+            case IndexType.EVI:
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    evi = 2.5 * (nir_data - red_data) / (nir_data + 6 * red_data - 7.5 * blue_data + 1)
+
+                combined_mask = np.ma.getmaskarray(red) | np.ma.getmaskarray(blue) | np.ma.getmaskarray(nir) 
+                masked_data = np.ma.array(evi, mask=combined_mask)
+
+        if masked_data.count() == 0:
             logger.warning("NDVI computation has no valid pixels for %s", red_url)
             return None, None
 
-        mean_ndvi = float(ndvi.mean())
-        logger.info("calculate_ndvi_from_urls: mean NDVI=%.4f", mean_ndvi)
+        mean_index = float(masked_data.mean())
+        logger.info("calculate_index_from_urls: mean index=%.4f", mean_index)
 
         try:
-            ndvi_to_store = ndvi.filled(np.nan).astype("float32")
-            mask_to_store = np.ma.getmaskarray(ndvi)
-            np.savez_compressed(
-                cache_path,
-                ndvi=ndvi_to_store,
-                mask=mask_to_store,
-                mean=np.array([mean_ndvi], dtype="float32")
-            )
-            logger.debug("Cached NDVI result at %s", cache_path)
-        except Exception:
-            logger.exception("Failed to persist NDVI cache at %s", cache_path)
+            index_data_to_store = masked_data.filled(np.nan).astype("float32")
+            mask_to_store = np.ma.getmaskarray(masked_data)
+            data_to_save = {
+                index_type.name: index_data_to_store,
+                "mask": mask_to_store,
+                "mean": np.array([mean_index], dtype="float32")
+            }
 
-        return ndvi, mean_ndvi
+            np.savez_compressed(cache_path, **data_to_save)
+            logger.debug("Cached Vegetation index result at %s", cache_path)
+        except Exception:
+            logger.exception("Failed to persist Vegetation index cache at %s", cache_path)
+
+        return masked_data, mean_index
 
     except Exception as e:
-        logger.exception("NDVI calculation failed")
-        st.warning(f"NDVI calculation error: {e}")
+        logger.exception("Vegetation index calculation failed")
+        st.warning(f"Vegetation index calculation error: {e}")
         return None, None
 
 
-
-
-def compute_ndvi_for_row(row: Tuple, bbox: List[float], token: str) -> Dict[str, Any]:
+def compute_index_for_row(row: Tuple, index_types: List[IndexType], bbox: List[float], token: str) -> Dict[str, Any]:
     if hasattr(row, "_asdict"):
         data = row._asdict()
     elif isinstance(row, dict):
         data = row
     else:
-        keys = ["id", "datetime", "cloud_cover", "collection", "nir_url", "red_url"]
+        keys = ["id", "datetime", "cloud_cover", "collection", "nir_url", "red_url", "blue_url"]
         data = {}
         for idx, key in enumerate(keys):
             if isinstance(row, (list, tuple)) and idx < len(row):
@@ -723,24 +753,28 @@ def compute_ndvi_for_row(row: Tuple, bbox: List[float], token: str) -> Dict[str,
 
     scene_id = data.get("id")
     red_url = data.get("red_url")
+    blue_url = data.get("blue_url")
     nir_url = data.get("nir_url")
 
-    if not red_url or not nir_url:
+    if not red_url or not nir_url or not blue_url:
         logger.debug("Skipping scene %s due to missing band URLs", scene_id)
         return {}
 
     logger.debug("Submitting NDVI task for scene=%s", scene_id)
 
-    _, mean_ndvi = calculate_ndvi_from_urls(red_url, nir_url, bbox, token)
-    if mean_ndvi is None:
-        return {}
-
-    return {
+    result = {
         "date": data.get("datetime"),
-        "ndvi": mean_ndvi,
         "cloud_cover": data.get("cloud_cover"),
-        "collection": data.get("collection"),
+        "collection": data.get("collection")
     }
+
+    for index_type in index_types:
+        _, mean_index = calculate_index_from_urls(index_type, red_url, blue_url, nir_url, bbox, token)
+        if mean_index is not None:
+            result[f"mean_{index_type.name}"] = mean_index
+
+    return result
+
 @st.cache_data(ttl=3600)
 def fetch_weather_history(lat: float, lon: float, start_date: datetime, end_date: datetime) -> pd.DataFrame:
     start_str = start_date.strftime("%Y-%m-%d")
@@ -868,8 +902,10 @@ if search_button:
 
                 results: List[Dict[str, Any]] = []
                 row_tuples = list(df.itertuples(index=False))
+                index_types = [IndexType.NDVI, IndexType.EVI]
+                
                 if row_tuples:
-                    worker = partial(compute_ndvi_for_row, bbox=bbox, token=earthdata_token)
+                    worker = partial(compute_index_for_row, index_types=index_types, bbox=bbox, token=earthdata_token)
                     max_workers = min(8, len(row_tuples))
                     try:
                         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -918,12 +954,25 @@ if search_button:
                     fig.add_trace(
                         go.Scatter(
                             x=ndvi_df['date'],
-                            y=ndvi_df['ndvi'],
+                            y=ndvi_df['mean_NDVI'],
                             mode="lines+markers",
                             name="NDVI",
                             line=dict(color="green", width=2),
                             marker=dict(size=8),
                             hovertemplate="<b>Date:</b> %{x}<br><b>NDVI:</b> %{y:.3f}<extra></extra>",
+                        ),
+                        secondary_y=False,
+                    )
+
+                    fig.add_trace(
+                        go.Scatter(
+                            x=ndvi_df['date'],
+                            y=ndvi_df['mean_EVI'],
+                            mode="lines+markers",
+                            name="EVI",
+                            line=dict(color="blue", width=2),
+                            marker=dict(size=8),
+                            hovertemplate="<b>Date:</b> %{x}<br><b>EVI:</b> %{y:.3f}<extra></extra>",
                         ),
                         secondary_y=False,
                     )
@@ -997,18 +1046,18 @@ if search_button:
 
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        st.metric("Mean NDVI", f"{ndvi_df['ndvi'].mean():.3f}")
+                        st.metric("Mean NDVI", f"{ndvi_df['mean_NDVI'].mean():.3f}")
                     with col2:
-                        st.metric("Max NDVI", f"{ndvi_df['ndvi'].max():.3f}")
+                        st.metric("Max NDVI", f"{ndvi_df['mean_NDVI'].max():.3f}")
                     with col3:
-                        st.metric("Min NDVI", f"{ndvi_df['ndvi'].min():.3f}")
+                        st.metric("Min NDVI", f"{ndvi_df['mean_NDVI'].min():.3f}")
                     with col4:
-                        st.metric("Std. dev.", f"{ndvi_df['ndvi'].std():.3f}")
+                        st.metric("Std. dev.", f"{ndvi_df['mean_NDVI'].std():.3f}")
 
-                    if ndvi_df['ndvi'].min() < 0:
+                    if ndvi_df['mean_NDVI'].min() < 0:
                         st.info("Negative NDVI values typically indicate open water, clouds, or other non-vegetation surfaces within the AOI.")
 
-                    mean_ndvi = ndvi_df['ndvi'].mean()
+                    mean_ndvi = ndvi_df['mean_NDVI'].mean()
                     if mean_ndvi < 0.2:
                         st.error("**Severely stressed potatoes** - bare soil, standing water, or senescing vines")
                     elif mean_ndvi < 0.4:
