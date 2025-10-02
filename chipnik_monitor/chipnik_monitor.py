@@ -140,14 +140,16 @@ CROP_PROFILES = (
     {
         "name": "Tomato",
         "ndvi_optimal": 0.68,
-        "ndvi_tolerance": 0.22,
+        "ndvi_tolerance": 0.30,
         "yield_t_per_ha": 70.0,
+        "min_match": 0.05,
     },
     {
         "name": "Sugar beet",
-        "ndvi_optimal": 0.70,
-        "ndvi_tolerance": 0.18,
+        "ndvi_optimal": 0.65,
+        "ndvi_tolerance": 0.35,
         "yield_t_per_ha": 55.0,
+        "min_match": 0.05,
     },
 )
 
@@ -845,6 +847,11 @@ def estimate_crop_size_ranking(mean_ndvi: float, reference_area_ha: float) -> pd
             continue
         match_ratio = 1.0 - abs(mean_ndvi - profile["ndvi_optimal"]) / tolerance
         match_ratio = max(0.0, min(1.0, match_ratio))
+        min_match = float(profile.get("min_match", 0.0) or 0.0)
+        floor_applied = False
+        if min_match > 0 and match_ratio < min_match:
+            match_ratio = min(min_match, 1.0)
+            floor_applied = True
         estimated_area = reference_area_ha * match_ratio
         if yield_t_per_ha is None or yield_t_per_ha <= 0:
             continue
@@ -854,6 +861,7 @@ def estimate_crop_size_ranking(mean_ndvi: float, reference_area_ha: float) -> pd
             "Match": match_ratio,
             "Estimated area (ha)": estimated_area,
             "Estimated yield (t)": estimated_yield,
+            "Match floor": "Yes" if floor_applied else "No",
         })
 
     if not rows:
@@ -863,6 +871,77 @@ def estimate_crop_size_ranking(mean_ndvi: float, reference_area_ha: float) -> pd
     df.sort_values(by="Estimated yield (t)", ascending=False, inplace=True)
     df.reset_index(drop=True, inplace=True)
     return df
+
+
+def build_yearly_crop_rankings(ndvi_df: pd.DataFrame, crop_df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate crop rankings into multi-year averages."""
+
+    if ndvi_df.empty or crop_df.empty:
+        return pd.DataFrame()
+
+    ndvi_yearly = (
+        ndvi_df.assign(year=pd.to_datetime(ndvi_df['date']).dt.year)
+        .groupby('year')['ndvi']
+        .mean()
+        .dropna()
+    )
+
+    crop_area_yearly = (
+        crop_df.assign(year=pd.to_datetime(crop_df['date']).dt.year)
+        .groupby('year')['crop_area_hectares']
+        .mean()
+        .dropna()
+    )
+
+    common_years = sorted(set(ndvi_yearly.index).intersection(crop_area_yearly.index))
+    if not common_years:
+        return pd.DataFrame()
+
+    per_year_rankings: list[pd.DataFrame] = []
+    for year in common_years:
+        mean_ndvi_year = float(ndvi_yearly.loc[year])
+        reference_area_year = float(crop_area_yearly.loc[year])
+        if reference_area_year <= 0 or math.isnan(reference_area_year) or math.isnan(mean_ndvi_year):
+            continue
+        ranking = estimate_crop_size_ranking(mean_ndvi_year, reference_area_year)
+        if ranking.empty:
+            continue
+        ranking.insert(0, 'Year', int(year))
+        per_year_rankings.append(ranking)
+
+    if not per_year_rankings:
+        return pd.DataFrame()
+
+    per_year_df = pd.concat(per_year_rankings, ignore_index=True)
+
+    summary = (
+        per_year_df
+        .groupby('Crop')
+        .agg({
+            'Estimated area (ha)': 'mean',
+            'Estimated yield (t)': 'mean',
+            'Match': 'mean',
+            'Match floor': lambda col: 'Yes' if (col == 'Yes').any() else 'No',
+            'Year': lambda col: sorted(set(int(v) for v in col)),
+        })
+        .reset_index()
+    )
+
+    if summary.empty:
+        return summary
+
+    summary['Years included'] = summary['Year'].apply(lambda years: ', '.join(str(y) for y in years))
+    summary['Year count'] = summary['Year'].apply(len)
+    summary = summary.drop(columns=['Year'])
+    summary = summary.rename(columns={
+        'Match': 'NDVI match',
+        'Match floor': 'Match floor applied',
+    })
+
+    summary['Match floor applied'] = summary['Match floor applied'].astype(str)
+    summary.sort_values(by='Estimated yield (t)', ascending=False, inplace=True)
+    summary.reset_index(drop=True, inplace=True)
+    return summary
 @st.cache_data(ttl=3600)
 def fetch_weather_history(lat: float, lon: float, start_date: datetime, end_date: datetime) -> pd.DataFrame:
     start_str = start_date.strftime("%Y-%m-%d")
@@ -1201,69 +1280,74 @@ if search_button:
                                 f"({latest_crop['crop_percent']:.1f}% of {total_area:.1f} ha AOI)."
                             )
 
-                        mean_crop_area = crop_df['crop_area_hectares'].mean()
-                        max_crop_area = crop_df['crop_area_hectares'].max()
-                        reference_area = float(np.nanmean([mean_crop_area, max_crop_area]))
-                        crop_size_df = estimate_crop_size_ranking(mean_ndvi, reference_area)
+                        yearly_rankings = build_yearly_crop_rankings(ndvi_df, crop_df)
 
-                        if not crop_size_df.empty:
-                            area_df = crop_size_df.sort_values(by="Estimated area (ha)", ascending=False)
+                        if not yearly_rankings.empty:
+                            area_source = yearly_rankings.sort_values('Estimated area (ha)', ascending=False)
                             area_fig = go.Figure()
                             area_fig.add_trace(
                                 go.Bar(
-                                    y=area_df['Crop'],
-                                    x=area_df['Estimated area (ha)'],
+                                    y=area_source['Crop'],
+                                    x=area_source['Estimated area (ha)'],
                                     orientation='h',
                                     marker_color="#2e8b57",
+                                    customdata=area_source[['NDVI match', 'Estimated yield (t)', 'Years included', 'Year count', 'Match floor applied']].to_numpy(),
                                     hovertemplate=(
-                                        "<b>%{y}</b><br>Estimated area: %{x:.1f} ha"
-                                        "<br>NDVI match: %{customdata[0]:.0%}"
-                                        "<br>Estimated yield: %{customdata[1]:.1f} t<extra></extra>"
+                                        "<b>Crop:</b> %{y}<br>Average area: %{x:.1f} ha"
+                                        "<br>Average NDVI match: %{customdata[0]:.0%}"
+                                        "<br>Average yield: %{customdata[1]:.1f} t"
+                                        "<br>Years included: %{customdata[2]} (%{customdata[3]} yrs)"
+                                        "<br>Match floor applied: %{customdata[4]}<extra></extra>"
                                     ),
-                                    customdata=area_df[['Match', 'Estimated yield (t)']].to_numpy(),
                                 )
                             )
                             area_fig.update_layout(
-                                title="Crop size ranking (area)",
-                                xaxis_title="Estimated feasible area (ha)",
+                                title="Average crop size ranking (area)",
+                                xaxis_title="Average feasible area (ha)",
                                 yaxis_title="Crop",
                                 height=420,
                                 margin=dict(l=120, r=40, t=80, b=60),
+                                showlegend=False,
                             )
                             st.plotly_chart(area_fig, use_container_width=True)
 
-                            yield_df = crop_size_df.sort_values(by="Estimated yield (t)", ascending=False)
+                            yield_source = yearly_rankings.sort_values('Estimated yield (t)', ascending=False)
                             yield_fig = go.Figure()
                             yield_fig.add_trace(
                                 go.Bar(
-                                    y=yield_df['Crop'],
-                                    x=yield_df['Estimated yield (t)'],
+                                    y=yield_source['Crop'],
+                                    x=yield_source['Estimated yield (t)'],
                                     orientation='h',
                                     marker_color="#556b2f",
+                                    customdata=yield_source[['NDVI match', 'Estimated area (ha)', 'Years included', 'Year count', 'Match floor applied']].to_numpy(),
                                     hovertemplate=(
-                                        "<b>%{y}</b><br>Estimated yield: %{x:.1f} t"
-                                        "<br>NDVI match: %{customdata[0]:.0%}"
-                                        "<br>Area basis: %{customdata[1]:.1f} ha<extra></extra>"
+                                        "<b>Crop:</b> %{y}<br>Average yield: %{x:.1f} t"
+                                        "<br>Average NDVI match: %{customdata[0]:.0%}"
+                                        "<br>Average area basis: %{customdata[1]:.1f} ha"
+                                        "<br>Years included: %{customdata[2]} (%{customdata[3]} yrs)"
+                                        "<br>Match floor applied: %{customdata[4]}<extra></extra>"
                                     ),
-                                    customdata=yield_df[['Match', 'Estimated area (ha)']].to_numpy(),
                                 )
                             )
                             yield_fig.update_layout(
-                                title="Crop yield ranking (heuristic)",
-                                xaxis_title="Estimated yield (t)",
+                                title="Average crop yield ranking (heuristic)",
+                                xaxis_title="Average yield (t)",
                                 yaxis_title="Crop",
                                 height=420,
                                 margin=dict(l=120, r=40, t=80, b=60),
+                                showlegend=False,
                             )
                             st.plotly_chart(yield_fig, use_container_width=True)
 
-                            with st.expander("Crop ranking details", expanded=False):
-                                pretty_df = crop_size_df.copy()
-                                pretty_df['Match'] = pretty_df['Match'].map(lambda v: f"{v:.0%}")
+                            with st.expander("Average crop ranking details", expanded=False):
+                                pretty_df = yearly_rankings.copy()
+                                pretty_df['NDVI match'] = pretty_df['NDVI match'].map(lambda v: f"{v:.0%}")
                                 for column in ('Estimated area (ha)', 'Estimated yield (t)'):
                                     pretty_df[column] = pretty_df[column].map(lambda v: f"{v:.1f}")
-                                pretty_df.rename(columns={'Match': 'NDVI match'}, inplace=True)
-                                st.dataframe(pretty_df, hide_index=True, use_container_width=True)
+                                display_columns = ['Crop', 'Estimated area (ha)', 'Estimated yield (t)', 'NDVI match', 'Match floor applied', 'Years included', 'Year count']
+                                st.dataframe(pretty_df[display_columns], hide_index=True, use_container_width=True)
+                        else:
+                            st.info("Multi-year crop rankings are unavailable – insufficient NDVI or crop area data across years.")
 
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
