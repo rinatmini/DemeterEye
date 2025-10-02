@@ -444,7 +444,7 @@ with st.sidebar:
         "Days back",
         min_value=100,
         max_value=4500,
-        value=365,
+        value=4500,
         step=30
     )
 
@@ -465,7 +465,8 @@ with st.sidebar:
 
     dataset = st.selectbox(
         "HLS dataset",
-        ["HLSS30.v2.0", "HLSL30.v2.0", "Both"],
+        ["Both", "HLSS30.v2.0", "HLSL30.v2.0"],
+        index=0,
         help="S=Sentinel-2, L=Landsat"
     )
 
