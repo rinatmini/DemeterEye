@@ -1,19 +1,29 @@
 import React from "react";
 
+/** Small colored pill for field status: processing | ready | error */
 export default function StatusPill({ status }) {
   const map = {
-    ready: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    processing: "bg-amber-50 text-amber-700 border-amber-200",
-    error: "bg-red-50 text-red-700 border-red-200",
+    processing: {
+      label: "Processing",
+      cls: "bg-amber-100 text-amber-700 ring-amber-200",
+    },
+    ready: {
+      label: "Ready",
+      cls: "bg-emerald-100 text-emerald-700 ring-emerald-200",
+    },
+    error: {
+      label: "Error",
+      cls: "bg-rose-100 text-rose-700 ring-rose-200",
+    },
   };
-  const label = (status || "").toUpperCase();
+  const m = map[status] || { label: "Unknown", cls: "bg-gray-100 text-gray-700 ring-gray-200" };
+
   return (
     <span
-      className={`text-xs border px-2 py-0.5 rounded-full ${
-        map[status] || "bg-gray-50 text-gray-600 border-gray-200"
-      }`}
+      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${m.cls}`}
+      title={status}
     >
-      {label || "—"}
+      {m.label}
     </span>
   );
 }

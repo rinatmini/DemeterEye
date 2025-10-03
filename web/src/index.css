@@ -17,3 +17,19 @@ body {
 button {
   cursor: pointer;
 }
+
+
+/* Hide number input spinners across browsers */
+@layer utilities {
+  /* Chrome, Safari, Edge, Opera */
+  .no-spinners::-webkit-outer-spin-button,
+  .no-spinners::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  /* Firefox */
+  .no-spinners {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+}
