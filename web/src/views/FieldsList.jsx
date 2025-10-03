@@ -1,83 +1,54 @@
 import React, { useEffect, useState } from "react";
-import { Plus, Map as MapIcon } from "lucide-react";
-import { apiFetch } from "../lib/api.js";
-import StatusPill from "../components/StatusPill.jsx";
+import { Link, useNavigate } from "react-router-dom";
+import { apiFetch } from "../lib/api";
 
-export default function FieldsList({ token, onCreate, onOpen }) {
-  const [fields, setFields] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  const load = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await apiFetch("/api/fields", { token });
-      setFields(data ? data : []);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+export default function FieldsList() {
+  const [items, setItems] = useState([]);
+  const [err, setErr] = useState("");
+  const nav = useNavigate();
+  const token = localStorage.getItem("token");
 
   useEffect(() => {
-    load();
-  }, []);
+    let st = true;
+    (async () => {
+      try {
+        const data = await apiFetch("/api/fields", { token });
+        if (st) setItems(data);
+      } catch (e) {
+        if (st) setErr(e.message);
+      }
+    })();
+    return () => {
+      st = false;
+    };
+  }, [token]);
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">My Fields</h2>
+        <h2 className="text-lg font-semibold">My fields</h2>
         <button
-          onClick={onCreate}
-          className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 text-white px-3 py-2 hover:bg-emerald-700"
+          className="rounded-xl bg-emerald-600 text-white px-3 py-2 hover:bg-emerald-700"
+          onClick={() => nav("/fields/new")}
         >
-          <Plus className="h-4 w-4" /> New Field
+          New field
         </button>
       </div>
-      {loading && <div className="text-gray-600">Loading…</div>}
-      {error && <div className="text-red-600">{error}</div>}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {fields.map((f) => (
-          <div
+
+      {err && <div className="text-rose-600">{err}</div>}
+
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {items.map((f) => (
+          <Link
             key={f.id}
-            className="rounded-2xl border bg-white overflow-hidden hover:shadow-sm transition"
+            to={`/fields/${f.id}`}
+            className="rounded-2xl border bg-white p-4 hover:shadow-sm"
           >
-            {f.photo ? (
-              <img
-                src={f.photo}
-                alt="field"
-                className="w-full h-36 object-cover"
-              />
-            ) : (
-              <div className="w-full h-36 grid place-items-center bg-gradient-to-br from-emerald-50 to-white text-emerald-600">
-                <MapIcon className="h-8 w-8" />
-              </div>
-            )}
-            <div className="p-4">
-              <div className="flex items-center justify-between">
-                <div className="font-medium">{f.name}</div>
-                <StatusPill status={f.status} />
-              </div>
-              {f?.meta?.areaHa && (
-                <div className="text-sm text-gray-600 mt-1">
-                  Area: {f.meta.areaHa} ha
-                </div>
-              )}
-              {f?.meta?.crop && (
-                <div className="text-sm text-gray-600">Crop: {f.meta.crop}</div>
-              )}
-              <div className="mt-3 flex justify-end">
-                <button
-                  onClick={() => onOpen(f)}
-                  className="text-emerald-700 hover:underline"
-                >
-                  Open
-                </button>
-              </div>
+            <div className="font-medium">{f.name}</div>
+            <div className="text-sm text-gray-600">
+              {f?.meta?.areaHa ?? "—"} ha • {f?.meta?.crop || "—"}
             </div>
-          </div>
+          </Link>
         ))}
       </div>
     </div>

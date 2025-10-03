@@ -24,8 +24,9 @@ type Field struct {
 	CreatedAt time.Time          `bson:"createdAt"    json:"createdAt"`
 
 	// Visual and lifecycle
-	Photo  string      `bson:"photo,omitempty"  json:"photo,omitempty"`  // URL to field avatar/photo
-	Status FieldStatus `bson:"status,omitempty" json:"status,omitempty"` // processing | ready | error
+	Photo        string      `bson:"photo,omitempty"  json:"photo,omitempty"`  // URL to field avatar/photo
+	Status       FieldStatus `bson:"status,omitempty" json:"status,omitempty"` // processing | ready | error
+	ErrorMessage string      `bson:"errorMessage,omitempty" json:"errorMessage,omitempty"`
 
 	// Farmer-facing metadata
 	Meta *FieldMeta `bson:"meta,omitempty" json:"meta,omitempty"`
