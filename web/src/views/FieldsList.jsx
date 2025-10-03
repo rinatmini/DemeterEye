@@ -1,32 +1,33 @@
+// src/views/FieldList.jsx
 import React, { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
+import StatusPill from "../components/StatusPill.jsx";
 
-export default function FieldsList() {
-  const [items, setItems] = useState([]);
-  const [err, setErr] = useState("");
+export default function FieldList() {
   const nav = useNavigate();
+  const [fields, setFields] = useState([]);
   const token = localStorage.getItem("token");
 
   useEffect(() => {
-    let st = true;
     (async () => {
-      try {
-        const data = await apiFetch("/api/fields", { token });
-        if (st) setItems(data);
-      } catch (e) {
-        if (st) setErr(e.message);
-      }
+      const data = await apiFetch("/api/fields", { token });
+      setFields(data || []);
     })();
-    return () => {
-      st = false;
-    };
-  }, [token]);
+  }, []);
+
+  const cardRing = (status) => {
+    const s = (status || "").toLowerCase();
+    if (s === "ready") return "ring-emerald-100 hover:ring-emerald-200";
+    if (s === "processing") return "ring-amber-100 hover:ring-amber-200";
+    if (s === "error") return "ring-rose-100 hover:ring-rose-200";
+    return "ring-gray-100 hover:ring-gray-200";
+  };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">My fields</h2>
+    <div className="p-6">
+      <div className="mb-4 flex items-center justify-between">
+        <h1 className="text-lg font-semibold">My fields</h1>
         <button
           className="rounded-xl bg-emerald-600 text-white px-3 py-2 hover:bg-emerald-700"
           onClick={() => nav("/fields/new")}
@@ -35,20 +36,31 @@ export default function FieldsList() {
         </button>
       </div>
 
-      {err && <div className="text-rose-600">{err}</div>}
-
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {items.map((f) => (
-          <Link
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {fields.map((f) => (
+          <button
             key={f.id}
-            to={`/fields/${f.id}`}
-            className="rounded-2xl border bg-white p-4 hover:shadow-sm"
+            onClick={() => nav(`/fields/${f.id}`)}
+            className={`text-left rounded-2xl border bg-white p-4 ring-1 transition ${cardRing(
+              f.status
+            )}`}
           >
-            <div className="font-medium">{f.name}</div>
-            <div className="text-sm text-gray-600">
+            <div className="flex items-start justify-between gap-3">
+              <div className="font-medium truncate">{f.name || "—"}</div>
+              <StatusPill status={f.status} />
+            </div>
+            <div className="mt-1 text-sm text-gray-600">
               {f?.meta?.areaHa ?? "—"} ha • {f?.meta?.crop || "—"}
             </div>
-          </Link>
+            {/* можно показать миниатюру, если есть */}
+            {f.photo && (
+              <img
+                src={f.photo}
+                alt=""
+                className="mt-3 h-24 w-full rounded-xl object-cover"
+              />
+            )}
+          </button>
         ))}
       </div>
     </div>
