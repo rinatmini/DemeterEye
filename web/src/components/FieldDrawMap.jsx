@@ -13,11 +13,16 @@ import L from "leaflet";
 export default function FieldDrawMap({
   value,
   onChange,
-  center = [50, 30],
-  zoom = 12,
+  initialCenter = [47.4554598, -122.2208032],
+  initialZoom = 14,
+  rememberView = true,
+  fitToGeometry = true,
   className = "w-full h-[70vh] rounded-xl border",
+  mode = "draw",
 }) {
   const fgRef = useRef(null);
+  const mapRef = useRef(null);
+  const LSKEY = "demetereye.mapView";
 
   useEffect(() => {
     const fg = fgRef.current;
@@ -26,8 +31,38 @@ export default function FieldDrawMap({
     if (value) {
       const gj = L.geoJSON({ type: "Feature", geometry: value });
       gj.eachLayer((l) => fg.addLayer(l));
+      if (fitToGeometry && mapRef.current) {
+        mapRef.current.fitBounds(gj.getBounds(), { padding: [24, 24] });
+      }
     }
-  }, [value]);
+  }, [value, fitToGeometry]);
+
+  const onMapCreated = (map) => {
+    mapRef.current = map;
+
+    let center = initialCenter,
+      zoom = initialZoom;
+    if (rememberView) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(LSKEY) || "null");
+        if (saved?.center && typeof saved.zoom === "number") {
+          center = saved.center;
+          zoom = saved.zoom;
+        }
+      } catch {}
+    }
+    map.setView(center, zoom);
+
+    if (rememberView) {
+      map.on("moveend", () => {
+        const c = map.getCenter();
+        localStorage.setItem(
+          LSKEY,
+          JSON.stringify({ center: [c.lat, c.lng], zoom: map.getZoom() })
+        );
+      });
+    }
+  };
 
   const reportFromGroup = () => {
     const fg = fgRef.current;
@@ -45,10 +80,17 @@ export default function FieldDrawMap({
   const onEdited = () => reportFromGroup();
   const onDeleted = () => onChange?.(null);
 
+  const FieldDrawMapOptions = mode !== "draw" && {
+    edit: false,
+    remove: false,
+    selectedPathOptions: { maintainColor: true },
+  };
+
   return (
     <MapContainer
-      center={center}
-      zoom={zoom}
+      center={initialCenter}
+      zoom={initialZoom}
+      whenCreated={onMapCreated}
       className={className}
       scrollWheelZoom
     >
@@ -59,7 +101,6 @@ export default function FieldDrawMap({
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
         </LayersControl.BaseLayer>
-
         <LayersControl.BaseLayer name="Satellite (Esri)" checked>
           <LayerGroup>
             <TileLayer
@@ -77,21 +118,33 @@ export default function FieldDrawMap({
       <FeatureGroup ref={fgRef}>
         <EditControl
           position="topleft"
-          draw={{
-            polygon: {
-              allowIntersection: false,
-              showArea: true,
-              shapeOptions: { color: "#10b981" },
-            },
-            marker: false,
-            circle: false,
-            circlemarker: false,
-            rectangle: false,
-            polyline: false,
-          }}
+          draw={
+            mode === "draw"
+              ? {
+                  polygon: {
+                    allowIntersection: false,
+                    showArea: true,
+                    shapeOptions: { color: "#10b981" },
+                  },
+                  marker: false,
+                  circle: false,
+                  circlemarker: false,
+                  rectangle: false,
+                  polyline: false,
+                }
+              : {
+                  polygon: false,
+                  marker: false,
+                  circle: false,
+                  circlemarker: false,
+                  rectangle: false,
+                  polyline: false,
+                }
+          }
           onCreated={onCreated}
           onEdited={onEdited}
           onDeleted={onDeleted}
+          {...FieldDrawMapOptions}
         />
       </FeatureGroup>
     </MapContainer>

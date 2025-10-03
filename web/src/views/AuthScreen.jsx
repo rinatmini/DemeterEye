@@ -1,14 +1,19 @@
 import React, { useState } from "react";
 import { Leaf, Loader2 } from "lucide-react";
 import { apiFetch } from "../lib/api.js";
+import { useLocation, useNavigate } from "react-router-dom";
 
-export default function AuthScreen({ onAuthed }) {
+export default function AuthScreen() {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+
+  const nav = useNavigate();
+  const loc = useLocation();
+  const redirectTo = loc.state?.from?.pathname || "/fields";
 
   const submit = async (e) => {
     e.preventDefault();
@@ -25,8 +30,8 @@ export default function AuthScreen({ onAuthed }) {
         method: "POST",
         body: { email, password },
       });
-
-      onAuthed(res.token);
+      localStorage.setItem("token", res.token);
+      nav(redirectTo, { replace: true });
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -35,7 +40,7 @@ export default function AuthScreen({ onAuthed }) {
   };
 
   return (
-    <div className="min-h-screen grid place-items-center p-4">
+    <div className="min-h-[70vh] grid place-items-center p-4">
       <div className="w-full max-w-md rounded-2xl border bg-white p-6 shadow-sm">
         <div className="flex items-center gap-2 mb-4">
           <Leaf className="h-5 w-5 text-emerald-600" />
@@ -72,7 +77,7 @@ export default function AuthScreen({ onAuthed }) {
             disabled={loading}
             className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 text-white py-2 hover:bg-emerald-700"
           >
-            {loading && <Loader2 className="h-4 w-4 animate-spin" />}{" "}
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
             {mode === "login" ? "Sign in" : "Create account"}
           </button>
         </form>
