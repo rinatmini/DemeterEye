@@ -48,3 +48,15 @@ type ingestFieldReq struct {
 	// Optional forecast to set for the current season. UpdatedAt is set server-side.
 	Forecast *models.FieldForecast `json:"forecast,omitempty"`
 }
+
+// Payload we send to Processor /reports
+type processorReportReq struct {
+	GeoJSON   json.RawMessage `json:"geojson"`             // entire Feature or Geometry
+	YieldType string          `json:"yieldType,omitempty"` // e.g., "Potato"
+	Yields    []YieldEntry    `json:"yields,omitempty"`
+}
+
+type processorReportResp struct {
+	OperationID string `json:"operation_id,omitempty"` // if processor returns a task id
+	Status      string `json:"status,omitempty"`       // e.g., "queued"
+}
