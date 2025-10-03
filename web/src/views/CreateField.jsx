@@ -65,8 +65,10 @@ export default function CreateField() {
       return next;
     });
   };
-  const addYieldRow = () =>
-    setYields((p) => [...p, { year: "", valueTph: "", unit: "t/ha" }]);
+  const addYieldRow = () => {
+    const prevYear = yields[yields.length - 1].year - 1;
+    setYields((p) => [...p, { year: prevYear, valueTph: "", unit: "t/ha" }]);
+  }
   const removeYieldRow = (idx) =>
     setYields((p) => p.filter((_, i) => i !== idx));
 
