@@ -8,3 +8,7 @@ shapely
 pydeck
 requests
 
+fastapi
+uvicorn
+pymongo
+python-dotenv
