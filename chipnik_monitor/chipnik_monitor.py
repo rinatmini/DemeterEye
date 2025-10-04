@@ -13,6 +13,11 @@ try:
     from rasterio.session import AWSSession  # type: ignore
 except ImportError:
     AWSSession = None  # type: ignore
+else:
+    try:
+        import boto3  # type: ignore  # noqa: F401
+    except ImportError:
+        AWSSession = None  # type: ignore
 from shapely.geometry import shape, box, mapping
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
@@ -55,7 +60,7 @@ DEFAULT_RADIUS_KM = 6.0
 
 ENABLE_EVI = os.getenv("ENABLE_EVI", "").strip().lower() in {"1", "true", "yes", "on"}
 
-DEFAULT_DAYS_BACK_LIMIT = 2000
+DEFAULT_DAYS_BACK_LIMIT = 1000
 _days_back_raw = os.getenv("DAYS_BACK_LIMIT", "").strip()
 if _days_back_raw:
     try:
