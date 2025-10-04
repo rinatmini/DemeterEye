@@ -13,10 +13,6 @@ env:
   APP_DIR: chipnik_monitor
   PYTHON_VERSION: "3.11"
   SERVICE_PORT: "8080"
-  SERVICE_NAME: chipnik-monitor
-  SYSTEMD_SERVICE_PATH: /etc/systemd/system/chipnik-monitor.service
-  SYSTEMD_ENV_DIR: /etc/chipnik-monitor
-  SYSTEMD_ENV_FILE: /etc/chipnik-monitor/chipnik-monitor.env
 
 jobs:
   deploy:
@@ -45,72 +41,50 @@ jobs:
       - name: Stop existing service
         shell: bash
         run: |
-          systemctl stop "${SERVICE_NAME}.service" || true
           if pgrep -f "uvicorn api:app" >/dev/null; then
-            echo "Stopping legacy Chipnik Monitor process"
-            pkill -f "uvicorn api:app" || true
+            echo "Stopping existing Chipnik Monitor process"
+            pkill -f "uvicorn api:app"
             sleep 5
           else
-            echo "No legacy Chipnik Monitor process found"
+            echo "No existing Chipnik Monitor process found"
           fi
 
-      - name: Configure systemd service
+      - name: Start service
         env:
           EARTHDATA_BEARER_TOKEN: ${{ secrets.EARTHDATA_BEARER_TOKEN }}
           MONGO_URI: ${{ secrets.MONGO_URI }}
           MONGO_DB: ${{ secrets.MONGO_DB }}
           DAYS_BACK_LIMIT: ${{ vars.DAYS_BACK_LIMIT }}
+        working-directory: ${{ env.APP_DIR }}
         shell: bash
         run: |
-          set -euo pipefail
-
           for var in EARTHDATA_BEARER_TOKEN MONGO_URI MONGO_DB; do
-            if [[ -z "${!var:-}" ]]; then
+            if [[ -z "${!var}" ]]; then
               echo "::error::Environment variable $var must be provided via repository secrets."
               exit 1
             fi
           done
 
-          SERVICE_FILE="${SYSTEMD_SERVICE_PATH}"
-          ENV_DIR="${SYSTEMD_ENV_DIR}"
-          ENV_FILE="${SYSTEMD_ENV_FILE}"
-          WORKDIR="${GITHUB_WORKSPACE}/${APP_DIR}"
-          RUN_USER="$(whoami)"
-          PYTHON_BIN="$(command -v python)"
+          LOG_PATH="${HOME}/chipnik-monitor.log"
+          echo "Starting Chipnik Monitor on port ${SERVICE_PORT}, logging to ${LOG_PATH}"
 
-          if [[ -z "${PYTHON_BIN}" ]]; then
-            echo "::error::Python binary not found in PATH"
-            exit 1
-          fi
+          nohup env \
+            EARTHDATA_BEARER_TOKEN="${EARTHDATA_BEARER_TOKEN}" \
+            MONGO_URI="${MONGO_URI}" \
+            MONGO_DB="${MONGO_DB}" \
+            DAYS_BACK_LIMIT="${DAYS_BACK_LIMIT:-2000}" \
+            uvicorn api:app --host 0.0.0.0 --port "${SERVICE_PORT}" \
+            > "${LOG_PATH}" 2>&1 &
 
-          mkdir -p "${ENV_DIR}"
-          {
-            printf '%s\n' "EARTHDATA_BEARER_TOKEN=${EARTHDATA_BEARER_TOKEN}"
-            printf '%s\n' "MONGO_URI=${MONGO_URI}"
-            printf '%s\n' "MONGO_DB=${MONGO_DB}"
-            printf '%s\n' "DAYS_BACK_LIMIT=${DAYS_BACK_LIMIT:-2000}"
-          } | tee "${ENV_FILE}" >/dev/null
-          chmod 600 "${ENV_FILE}"
-
-          export SERVICE_FILE ENV_FILE WORKDIR RUN_USER PYTHON_BIN SERVICE_PORT
-          python -c "import os, textwrap; service = textwrap.dedent(f\"\"\"[Unit]\nDescription=Chipnik Monitor API\nAfter=network.target\n\n[Service]\nType=simple\nUser={os.environ['RUN_USER']}\nGroup={os.environ['RUN_USER']}\nWorkingDirectory={os.environ['WORKDIR']}\nEnvironmentFile={os.environ['ENV_FILE']}\nExecStart={os.environ['PYTHON_BIN']} -m uvicorn api:app --host 0.0.0.0 --port {os.environ['SERVICE_PORT']}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n\"\"\"); print(service, end='')" | tee "${SERVICE_FILE}" >/dev/null
-
-          systemctl daemon-reload
-          systemctl enable "${SERVICE_NAME}.service"
-
-      - name: Restart systemd service
-        shell: bash
-        run: |
-          systemctl restart "${SERVICE_NAME}.service"
-          systemctl status "${SERVICE_NAME}.service" --no-pager
+          echo $! > "${HOME}/chipnik-monitor.pid"
+          echo "Process started with PID $(cat "${HOME}/chipnik-monitor.pid")"
 
       - name: Verify service
         shell: bash
         run: |
           sleep 5
-          if ! systemctl is-active --quiet "${SERVICE_NAME}.service"; then
-            systemctl status "${SERVICE_NAME}.service" --no-pager
-            echo "::error::Chipnik Monitor systemd service failed to start."
+          if ! pgrep -f "uvicorn api:app" >/dev/null; then
+            echo "::error::Chipnik Monitor service failed to start. Check logs at ${HOME}/chipnik-monitor.log"
             exit 1
           fi
-          echo "Chipnik Monitor systemd service is running"
+          echo "Chipnik Monitor service is running"
