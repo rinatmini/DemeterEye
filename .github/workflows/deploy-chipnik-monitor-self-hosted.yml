@@ -1,11 +1,11 @@
 name: Deploy Chipnik Monitor API (Self-Hosted)
 
 on:
-  push:
-    branches:
-      - master
-    paths:
-      - "chipnik_monitor/**"
+  # push:
+  #   branches:
+  #     - master
+  #   paths:
+  #     - "chipnik_monitor/**"
   workflow_dispatch:
   workflow_call:
 
