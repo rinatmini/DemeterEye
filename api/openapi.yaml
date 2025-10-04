@@ -1,0 +1,333 @@
+openapi: "3.0.3"
+info:
+  title: DemeterEye API
+  version: "1.0.0"
+  description: DemeterEye backend API (auth + fields).
+
+servers:
+  - url: https://demetereye-monitor-1060536779509.us-central1.run.app
+    description: prod
+
+  - url: http://localhost:8080
+    description: local dev
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    RegisterReq:
+      type: object
+      required: [username, email, password]
+      properties:
+        username: { type: string }
+        email: { type: string, format: email }
+        password: { type: string }
+
+    LoginReq:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+
+    TokenResp:
+      type: object
+      properties:
+        token: { type: string }
+
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        username: { type: string }
+        email: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    YieldEntry:
+      type: object
+      properties:
+        year: { type: integer }
+        valueTph: { type: number, format: float }
+        unit: { type: string }
+        notes: { type: string }
+
+    FieldMeta:
+      type: object
+      properties:
+        areaHa: { type: number, format: float }
+        notes: { type: string }
+        crop: { type: string }
+
+    ReportDaily:
+      type: object
+      description: One daily observation produced by the processor.
+      properties:
+        date:
+          type: string
+          format: date-time
+          description: RFC3339 timestamp
+        ndvi:
+          type: number
+          format: float
+          nullable: true
+        cloud_cover:
+          type: integer
+          nullable: true
+          description: HLS cloud mask (0..100)
+        collection:
+          type: string
+          description: e.g., "HLSS30_2.0"
+        temperature_deg_c:
+          type: number
+          format: float
+          nullable: true
+        humidity_pct:
+          type: number
+          format: float
+          nullable: true
+        cloudcover_pct:
+          type: number
+          format: float
+          nullable: true
+        wind_speed_mps:
+          type: number
+          format: float
+          nullable: true
+        clarity_pct:
+          type: number
+          format: float
+          nullable: true
+
+    ReportForecast:
+      type: object
+      description: Forecast section produced by the processor.
+      properties:
+        year:
+          type: integer
+        yieldTph:
+          type: number
+          format: float
+          nullable: true
+        ndviPeak:
+          type: number
+          format: float
+          nullable: true
+        ndviPeakAt:
+          type: string
+          format: date-time
+          nullable: true
+        model:
+          type: string
+        confidence:
+          type: number
+          format: float
+          nullable: true
+
+    Field:
+      type: object
+      properties:
+        id: { type: string }
+        ownerId: { type: string }
+        name: { type: string }
+        geometry:
+          type: object
+          description: GeoJSON Polygon or MultiPolygon
+        createdAt: { type: string, format: date-time }
+        status:
+          type: string
+          description: processing | ready | error
+        photo: { type: string }
+        meta:
+          $ref: '#/components/schemas/FieldMeta'
+        yields:
+          type: array
+          items:
+            $ref: '#/components/schemas/YieldEntry'
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReportDaily'
+        forecast:
+          $ref: '#/components/schemas/ReportForecast'
+        errorMessage: { type: string }
+
+    CreateFieldReq:
+      type: object
+      required: [name, geometry]
+      properties:
+        name: { type: string }
+        geometry:
+          type: object
+          description: GeoJSON Polygon or MultiPolygon (raw JSON)
+        areaHa: { type: number, format: float }
+        notes: { type: string }
+        crop: { type: string }
+        photo: { type: string }
+        yields:
+            type: array
+            items:
+              $ref: '#/components/schemas/YieldEntry'
+
+    ProcessorReportReq:
+      type: object
+      properties:
+        fieldId: { type: string }
+        geojson: { type: object }
+        yieldType: { type: string }
+        yields:
+          type: array
+          items:
+            $ref: '#/components/schemas/YieldEntry'
+
+paths:
+  /api/auth/register:
+    post:
+      summary: Register new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterReq'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        '400':
+          description: Bad request
+
+  /api/auth/login:
+    post:
+      summary: Login user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginReq'
+      responses:
+        '200':
+          description: Token response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResp'
+        '401':
+          description: Invalid credentials
+
+  /api/me:
+    get:
+      summary: Get current user
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current user profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          description: Unauthorized
+
+  /api/fields:
+    get:
+      summary: List current user's fields
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Array of fields
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Field'
+    post:
+      summary: Create new field (triggers processor /reports)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFieldReq'
+      responses:
+        '200':
+          description: Created field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Field'
+        '400':
+          description: Bad request
+
+  /api/fields/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    get:
+      summary: Get single field by id (owner only)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Field'
+        '404':
+          description: Not found
+    put:
+      summary: Update field — triggers processor /reports if geometry provided
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFieldReq'
+      responses:
+        '200':
+          description: Updated field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Field'
+        '400':
+          description: Bad request
+        '404':
+          description: Not found
+    delete:
+      summary: Delete field
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        '404':
+          description: Not found
