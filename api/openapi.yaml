@@ -160,7 +160,7 @@ components:
 
     CreateFieldReq:
       type: object
-      required: [name, geometry]
+      required: [name, crop, geometry]
       properties:
         name: { type: string }
         geometry:

@@ -73,6 +73,11 @@ export default function CreateField() {
     });
   };
   const addYieldRow = () => {
+
+    if (yields.length === 0) {
+      setYields((p) => [...p, { year: new Date().getFullYear(), valueTph: "", unit: "t/ha" }]);
+      return;
+    }
     const prevYear = yields[yields.length - 1].year - 1;
     setYields((p) => [...p, { year: prevYear, valueTph: "", unit: "t/ha" }]);
   }
@@ -81,8 +86,8 @@ export default function CreateField() {
 
   const submit = async () => {
     setError("");
-    if (!name || !geometry) {
-      setError("Name and polygon are required");
+    if (!name || !crop || !geometry) {
+      setError("Name, crop and polygon are required");
       return;
     }
     // normalize yields: keep only rows with both year & value
@@ -216,12 +221,12 @@ export default function CreateField() {
             ))}
           </select>
 
-          <input
+          {/* <input
             className="w-full rounded-xl border px-3 py-2"
             placeholder="Photo URL"
             value={photo}
             onChange={(e) => setPhoto(e.target.value)}
-          />
+          /> */}
 
           <textarea
             className="w-full rounded-xl border px-3 py-2"
