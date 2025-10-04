@@ -5,6 +5,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
+
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 // routes wires middlewares and endpoints. Adjust CORS for your frontend hosts.
@@ -19,6 +21,15 @@ func (a *App) routes() http.Handler {
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
+
+	r.Get("/api/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+		http.ServeFile(w, r, "openapi.yaml")
+	})
+
+	r.Mount("/swagger", httpSwagger.Handler(
+		httpSwagger.URL("/api/openapi.yaml"),
+	))
 
 	r.Route("/api", func(api chi.Router) {
 		api.Post("/auth/register", a.handleRegister)
