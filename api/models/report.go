@@ -37,6 +37,8 @@ type ReportDaily struct {
 	CloudcoverPct  *float64  `bson:"cloudcover_pct,omitempty"    json:"cloudcover_pct,omitempty"`
 	WindSpeedMps   *float64  `bson:"wind_speed_mps,omitempty"    json:"wind_speed_mps,omitempty"`
 	ClarityPct     *float64  `bson:"clarity_pct,omitempty"       json:"clarity_pct,omitempty"`
+
+	Type int `bson:"type,omitempty" json:"type,omitempty"` // 0: actual, 1: forecast
 }
 
 // ReportForecast — forecast section produced by the processor.
