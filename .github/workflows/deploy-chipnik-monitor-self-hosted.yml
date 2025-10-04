@@ -92,24 +92,8 @@ jobs:
           } | sudo tee "${ENV_FILE}" >/dev/null
           sudo chmod 600 "${ENV_FILE}"
 
-          sudo tee "${SERVICE_FILE}" >/dev/null <<EOF
-[Unit]
-Description=Chipnik Monitor API
-After=network.target
-
-[Service]
-Type=simple
-User=${RUN_USER}
-Group=${RUN_USER}
-WorkingDirectory=${WORKDIR}
-EnvironmentFile=${ENV_FILE}
-ExecStart=${PYTHON_BIN} -m uvicorn api:app --host 0.0.0.0 --port ${SERVICE_PORT}
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
+          export SERVICE_FILE ENV_FILE WORKDIR RUN_USER PYTHON_BIN SERVICE_PORT
+          python -c "import os, textwrap; service = textwrap.dedent(f\"\"\"[Unit]\nDescription=Chipnik Monitor API\nAfter=network.target\n\n[Service]\nType=simple\nUser={os.environ['RUN_USER']}\nGroup={os.environ['RUN_USER']}\nWorkingDirectory={os.environ['WORKDIR']}\nEnvironmentFile={os.environ['ENV_FILE']}\nExecStart={os.environ['PYTHON_BIN']} -m uvicorn api:app --host 0.0.0.0 --port {os.environ['SERVICE_PORT']}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n\"\"\"); print(service, end='')" | sudo tee "${SERVICE_FILE}" >/dev/null
 
           sudo systemctl daemon-reload
           sudo systemctl enable "${SERVICE_NAME}.service"
