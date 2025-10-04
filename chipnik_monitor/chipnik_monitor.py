@@ -60,7 +60,7 @@ DEFAULT_RADIUS_KM = 6.0
 
 ENABLE_EVI = os.getenv("ENABLE_EVI", "").strip().lower() in {"1", "true", "yes", "on"}
 
-DEFAULT_DAYS_BACK_LIMIT = 1000
+DEFAULT_DAYS_BACK_LIMIT = 730
 _days_back_raw = os.getenv("DAYS_BACK_LIMIT", "").strip()
 if _days_back_raw:
     try:
@@ -1230,6 +1230,7 @@ if search_button:
                     if worker_cap_raw:
                         try:
                             worker_cap = max(1, int(worker_cap_raw))
+                            logger.info(f"WORKER_CAP={worker_cap_raw}")
                         except ValueError:
                             logger.warning("Invalid WORKER_CAP=%s; falling back to default", worker_cap_raw)
                             worker_cap = default_worker_cap
