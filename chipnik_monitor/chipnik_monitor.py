@@ -36,7 +36,13 @@ if not logger.handlers:
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter('%(levelname)s:%(name)s:%(message)s'))
     logger.addHandler(handler)
-logger.setLevel(logging.DEBUG)
+
+_CLOUD_RUN_SERVICE = os.getenv('K_SERVICE') or os.getenv('GOOGLE_CLOUD_PROJECT')
+logger.setLevel(logging.ERROR if _CLOUD_RUN_SERVICE else logging.DEBUG)
+
+def log_progress(message: str) -> None:
+    level = logging.ERROR if _CLOUD_RUN_SERVICE else logging.INFO
+    logger.log(level, message)
 
 DEFAULT_CENTER_LON = -122.09261814845487
 DEFAULT_CENTER_LAT = 47.60464601773639
@@ -1130,9 +1136,16 @@ if search_button:
                                         results.append(result)
                                 except Exception:
                                     logger.exception("NDVI worker failed for index %s", idx)
-                                status_text.text(
-                                    f"Processing {completed}/{len(row_tuples)}: {df.iloc[idx]['datetime'].strftime('%Y-%m-%d')}"
-                                )
+                                scene_info = df.iloc[idx]
+                                scene_id = scene_info.get('id') if hasattr(scene_info, 'get') else getattr(scene_info, 'id', None)
+                                date_value = scene_info.get('datetime') if hasattr(scene_info, 'get') else getattr(scene_info, 'datetime', None)
+                                date_label = date_value.strftime('%Y-%m-%d') if hasattr(date_value, 'strftime') else str(date_value)
+                                message = f"Processing scene {completed}/{len(row_tuples)}"
+                                if scene_id:
+                                    message += f" ({scene_id})"
+                                message += f": {date_label}"
+                                status_text.text(message)
+                                log_progress(message)
                                 progress_bar.progress(completed / len(row_tuples))
                     except Exception:
                         logger.exception("Parallel NDVI processing failed; falling back to sequential execution")
@@ -1142,9 +1155,16 @@ if search_button:
                         logger.info("Parallel NDVI returned no results; retrying sequential execution")
                         progress_bar.progress(0.0)
                         for idx, row in enumerate(row_tuples):
-                            status_text.text(
-                                f"Processing {idx + 1}/{len(row_tuples)}: {df.iloc[idx]['datetime'].strftime('%Y-%m-%d')}"
-                            )
+                            scene_info = df.iloc[idx]
+                            scene_id = scene_info.get('id') if hasattr(scene_info, 'get') else getattr(scene_info, 'id', None)
+                            date_value = scene_info.get('datetime') if hasattr(scene_info, 'get') else getattr(scene_info, 'datetime', None)
+                            date_label = date_value.strftime('%Y-%m-%d') if hasattr(date_value, 'strftime') else str(date_value)
+                            message = f"Processing scene {idx + 1}/{len(row_tuples)}"
+                            if scene_id:
+                                message += f" ({scene_id})"
+                            message += f": {date_label}"
+                            status_text.text(message)
+                            log_progress(message)
                             result = worker(row)
                             if result:
                                 results.append(result)
