@@ -6,7 +6,13 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/joho/godotenv"
 )
+
+func init() {
+	_ = godotenv.Load()
+}
 
 func main() {
 	cfg := mustConfig()

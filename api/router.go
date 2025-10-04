@@ -34,9 +34,6 @@ func (a *App) routes() http.Handler {
 				fr.Get("/{id}", a.handleGetField)
 				fr.Put("/{id}", a.handleUpdateField)
 				fr.Delete("/{id}", a.handleDeleteField)
-
-				// Ingestion from processor (history + optional forecast)
-				fr.Post("/{id}/ingest", a.handleIngestFieldData)
 			})
 		})
 	})
