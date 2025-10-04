@@ -354,7 +354,12 @@ def _predict_ndvi_with_ml(history_data: List[Dict[str, Any]], weather_df: pd.Dat
         # Add weather features for future dates (use climatology if no forecast available)
         if not weather_df.empty:
             # Use historical weather patterns for future predictions
-            historical_monthly = weather_df.groupby(weather_df['date'].dt.month).mean()
+            # Convert date column to datetime if needed
+            weather_df_copy = weather_df.copy()
+            weather_df_copy['date'] = pd.to_datetime(weather_df_copy['date'])
+            # Select only numeric columns for mean calculation
+            numeric_columns = weather_df_copy.select_dtypes(include=[np.number]).columns
+            historical_monthly = weather_df_copy.groupby(weather_df_copy['date'].dt.month)[numeric_columns].mean()
             future_df['month'] = future_df['ds'].dt.month
             
             # Map historical weather patterns to future months
@@ -792,6 +797,7 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
     
     if ml_results.get('model') == 'prophet_ml':
         # Use ML predictions
+        monitor.logger.info("Forecast NDVI peak %.3f", ml_results.get('ndvi_peak', 0.0))
         ndvi_peak = ml_results.get('ndvi_peak')
         ndvi_peak_at = ml_results.get('ndvi_peak_at')
         flowering_start_date = ml_results.get('flowering_start_date')
