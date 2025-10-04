@@ -77,6 +77,7 @@ func (a *App) handleCreateField(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		// send update to processor
 		a.PostProcessorReports(ctx, processorReportReq{
+			FieldID:   f.ID.Hex(),
 			GeoJSON:   req.Geometry,
 			YieldType: req.Crop,
 			Yields:    req.Yields,
@@ -186,6 +187,7 @@ func (a *App) handleUpdateField(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		// send update to processor
 		a.PostProcessorReports(ctx, processorReportReq{
+			FieldID:   out.ID.Hex(),
 			GeoJSON:   req.Geometry,
 			YieldType: req.Crop,
 			Yields:    req.Yields,

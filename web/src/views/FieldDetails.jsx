@@ -6,6 +6,7 @@ import { apiFetch } from "../lib/api";
 import StatusPill from "../components/StatusPill.jsx";
 import MetricsChart from "../components/MetricsChart.jsx";
 import FieldDrawMap from "../components/FieldDrawMap.jsx";
+import fieldSvg from "../assets/field.svg";
 
 export default function FieldDetails() {
   const { id } = useParams();
@@ -101,30 +102,38 @@ export default function FieldDetails() {
 
   function centerFromGeometry(geo) {
     const fallback = [47.6062, -122.3321];
-  
+
     if (!geo) return fallback;
-  
+
     if (geo.type === "Point") {
       const [lon, lat] = geo.coordinates;
       return [lat, lon];
     }
-  
+
     if (geo.type === "Polygon") {
       const ring = geo.coordinates?.[0];
       if (!ring?.length) return fallback;
-      let sx = 0, sy = 0;
-      for (const [lon, lat] of ring) { sx += lon; sy += lat; }
+      let sx = 0,
+        sy = 0;
+      for (const [lon, lat] of ring) {
+        sx += lon;
+        sy += lat;
+      }
       return [sy / ring.length, sx / ring.length];
     }
-  
+
     if (geo.type === "MultiPolygon") {
       const ring = geo.coordinates?.[0]?.[0];
       if (!ring?.length) return fallback;
-      let sx = 0, sy = 0;
-      for (const [lon, lat] of ring) { sx += lon; sy += lat; }
+      let sx = 0,
+        sy = 0;
+      for (const [lon, lat] of ring) {
+        sx += lon;
+        sy += lat;
+      }
       return [sy / ring.length, sx / ring.length];
     }
-  
+
     return fallback;
   }
 
@@ -152,15 +161,26 @@ export default function FieldDetails() {
           </div>
 
           {/* Chart card */}
-          <div className="rounded-2xl border bg-white p-4 pb-8">
-            <div className="mb-2 flex items-center gap-2">
-              <span className="font-semibold">Metrics</span>
+          {field.status === "ready" && (
+            <div className="rounded-2xl border bg-white p-4 pb-8">
+              <div className="mb-2 flex items-center gap-2">
+                <span className="font-semibold">Metrics</span>
+              </div>
+              <MetricsChart history={history} />
             </div>
-            <MetricsChart history={history} />
-          </div>
+          )}
 
           {/* Map card */}
           <div className="rounded-2xl border bg-white p-4">
+            {field.status === "processing" && (
+              <div className="-m-2 -mb-2">
+                <img
+                  src={fieldSvg}
+                  alt="Processing"
+                  className="w-full h-full"
+                />
+              </div>
+            )}
             <div className="mb-2 flex items-center justify-between">
               <span className="font-semibold flex items-center gap-2">
                 <MapIcon className="h-4 w-4" /> Field geometry

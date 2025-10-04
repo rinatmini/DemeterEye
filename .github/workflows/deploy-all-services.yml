@@ -1,0 +1,17 @@
+name: Deploy All Services
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-api:
+    uses: ./.github/workflows/deploy-api.yml
+    secrets: inherit
+
+  deploy-web:
+    uses: ./.github/workflows/deploy-web.yml
+    secrets: inherit
+
+  deploy-monitor:
+    uses: ./.github/workflows/deploy-chipnik-monitor.yml
+    secrets: inherit

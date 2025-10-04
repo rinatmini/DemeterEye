@@ -52,6 +52,7 @@ _ALT_PROFILE_NAMES = {
 class ReportRequest(BaseModel):
     geojson: Dict[str, Any]
     yield_type: str = Field(..., alias="yieldType")
+    field_id: Optional[str] = Field(None, alias="fieldId")
 
     class Config:
         allow_population_by_field_name = True
@@ -112,13 +113,15 @@ def _serialisable_geojson(payload: Union[str, Dict[str, Any]]) -> Union[str, Dic
 
 
 def _persist_report_state(operation_id: str, geojson_payload: Union[str, Dict[str, Any]], yield_type: str,
-                          status: str, history: Optional[List[Dict[str, Any]]] = None,
+                          status: str, field_id: Optional[str] = None,
+                          history: Optional[List[Dict[str, Any]]] = None,
                           forecast: Optional[Dict[str, Any]] = None, error_message: Optional[str] = None) -> None:
     collection = _get_reports_collection()
 
     state = _get_operation(operation_id)
     created_at = state.get("created_at") if state else datetime.now(timezone.utc)
     updated_at = state.get("updated_at") if state else datetime.now(timezone.utc)
+    resolved_field_id = field_id or (state.get("field_id") if state else None)
 
     document = {
         "operation_id": operation_id,
@@ -126,6 +129,7 @@ def _persist_report_state(operation_id: str, geojson_payload: Union[str, Dict[st
         "created_at": _mongo_ready_datetime(created_at),
         "updated_at": _mongo_ready_datetime(updated_at),
         "yieldType": yield_type,
+        "fieldId": resolved_field_id,
         "geojson": _serialisable_geojson(geojson_payload),
         "history": history,
         "forecast": forecast,
@@ -230,7 +234,7 @@ def _fetch_weather_history(lat: float, lon: float, start_date: datetime, end_dat
 
 
 
-def _init_operation(yield_type: str, geojson_payload: Union[str, Dict[str, Any]]) -> str:
+def _init_operation(yield_type: str, geojson_payload: Union[str, Dict[str, Any]], field_id: Optional[str] = None) -> str:
     op_id = str(uuid4())
     now = datetime.now(timezone.utc)
     serialised_geojson = _serialisable_geojson(geojson_payload)
@@ -241,6 +245,7 @@ def _init_operation(yield_type: str, geojson_payload: Union[str, Dict[str, Any]]
             "updated_at": now,
             "yield_type": yield_type,
             "geojson": serialised_geojson,
+            "field_id": field_id,
             "result": None,
             "error": None,
         }
@@ -269,8 +274,49 @@ def _get_operation(op_id: str) -> Optional[Dict[str, Any]]:
         return dict(state)
 
 
+def _get_persisted_operation(op_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        collection = _get_reports_collection()
+    except Exception:
+        monitor.logger.exception("Unable to access MongoDB when retrieving operation %s", op_id)
+        return None
 
-def _run_report_job(op_id: str, geojson_payload: Union[str, Dict[str, Any]], yield_profile: Dict[str, Any]) -> None:
+    document = collection.find_one({"operation_id": op_id})
+    if not document:
+        return None
+
+    def _ensure_aware(value: Any) -> Optional[datetime]:
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
+        return None
+
+    history = document.get("history")
+    forecast = document.get("forecast")
+
+    state: Dict[str, Any] = {
+        "status": document.get("status"),
+        "created_at": _ensure_aware(document.get("created_at")),
+        "updated_at": _ensure_aware(document.get("updated_at")),
+        "yield_type": document.get("yieldType"),
+        "field_id": document.get("fieldId"),
+        "result": None,
+        "error": document.get("errorMessage"),
+    }
+
+    if history is not None or forecast is not None:
+        state["result"] = {
+            "history": history,
+            "forecast": forecast,
+        }
+
+    return state
+
+
+
+def _run_report_job(op_id: str, geojson_payload: Union[str, Dict[str, Any]], yield_profile: Dict[str, Any],
+                    field_id: Optional[str] = None) -> None:
     _update_operation(op_id, status="processing")
     try:
         report = _generate_report(geojson_payload, yield_profile)
@@ -279,13 +325,13 @@ def _run_report_job(op_id: str, geojson_payload: Union[str, Dict[str, Any]], yie
         error_message = str(exc)
         _update_operation(op_id, status="error", error=error_message)
         try:
-            _persist_report_state(op_id, geojson_payload, yield_profile.get("name", ""), status="error", error_message=error_message)
+            _persist_report_state(op_id, geojson_payload, yield_profile.get("name", ""), status="error", field_id=field_id, error_message=error_message)
         except Exception:
             monitor.logger.exception("Failed to persist error state for %s", op_id)
         return
     _update_operation(op_id, status="ready", result=report, error=None)
     try:
-        _persist_report_state(op_id, geojson_payload, yield_profile.get("name", ""), status="ready", history=report.get("history"), forecast=report.get("forecast"))
+        _persist_report_state(op_id, geojson_payload, yield_profile.get("name", ""), status="ready", field_id=field_id, history=report.get("history"), forecast=report.get("forecast"))
     except Exception:
         monitor.logger.exception("Failed to persist report state for %s", op_id)
 
@@ -446,8 +492,8 @@ def create_report(request: ReportRequest, background_tasks: BackgroundTasks) -> 
 
     operation_id = ""
     try:
-        operation_id = _init_operation(profile["name"], request.geojson)
-        _persist_report_state(operation_id, request.geojson, profile["name"], status="processing")
+        operation_id = _init_operation(profile["name"], request.geojson, request.field_id)
+        _persist_report_state(operation_id, request.geojson, profile["name"], status="processing", field_id=request.field_id)
     except Exception as exc:
         monitor.logger.exception("Failed to initialize report operation")
         if operation_id:
@@ -455,21 +501,28 @@ def create_report(request: ReportRequest, background_tasks: BackgroundTasks) -> 
                 _OPERATIONS.pop(operation_id, None)
         raise HTTPException(status_code=500, detail="Failed to initialize report persistence") from exc
 
-    background_tasks.add_task(_run_report_job, operation_id, request.geojson, profile)
+    background_tasks.add_task(_run_report_job, operation_id, request.geojson, profile, request.field_id)
     return {"operation_id": operation_id, "status": "accepted"}
 
 @app.get("/reports/{operation_id}")
 def get_report(operation_id: str) -> Dict[str, Any]:
     state = _get_operation(operation_id)
     if state is None:
+        state = _get_persisted_operation(operation_id)
+
+    if state is None:
         raise HTTPException(status_code=404, detail="Operation not found")
+
+    created_at = state.get("created_at")
+    updated_at = state.get("updated_at")
 
     payload = {
         "operation_id": operation_id,
-        "status": state["status"],
-        "created_at": _isoformat_utc(state["created_at"]),
-        "updated_at": _isoformat_utc(state["updated_at"]),
-        "yieldType": state["yield_type"],
+        "status": state.get("status") or "unknown",
+        "created_at": _isoformat_utc(created_at) if created_at else None,
+        "updated_at": _isoformat_utc(updated_at) if updated_at else None,
+        "yieldType": state.get("yield_type"),
+        "fieldId": state.get("field_id"),
         "errorMessage": state.get("error"),
     }
     if state.get("result") is not None:
