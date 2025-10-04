@@ -30,7 +30,7 @@ app = FastAPI(
     description="GeoJSON-driven access to HLS reports computed by Chipnik Monitor",
 )
 
-_DEFAULT_LOOKBACK_DAYS = 4500
+_DEFAULT_LOOKBACK_DAYS = 720
 _DEFAULT_MAX_CLOUD = 20
 _DEFAULT_DATASET = "Both"
 _DEFAULT_MODEL = "eurustic"
