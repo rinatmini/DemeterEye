@@ -21,6 +21,7 @@ RUN apt-get update \
     libgdal-dev \
     proj-bin \
     libproj-dev \
+    docker.io \
   && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://www.noip.com/download/linux/latest -o /tmp/noip-duc.tar.gz \

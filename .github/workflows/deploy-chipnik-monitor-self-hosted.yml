@@ -11,7 +11,6 @@ on:
 
 env:
   APP_DIR: chipnik_monitor
-  PYTHON_VERSION: "3.11"
   SERVICE_PORT: "8080"
 
 jobs:
@@ -25,66 +24,36 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: "pip"
-          cache-dependency-path: ${{ env.APP_DIR }}/requirements.txt
-
-      - name: Install dependencies
+      - name: Build image
         working-directory: ${{ env.APP_DIR }}
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          docker build -t chipnik-monitor:latest .
 
-      - name: Stop existing service
-        shell: bash
+      - name: Stop previous container (if any)
         run: |
-          if pgrep -f "uvicorn api:app" >/dev/null; then
-            echo "Stopping existing Chipnik Monitor process"
-            pkill -f "uvicorn api:app"
-            sleep 5
-          else
-            echo "No existing Chipnik Monitor process found"
-          fi
+          docker rm -f chipnik-monitor || true
 
-      - name: Start service
+      - name: Run container
         env:
           EARTHDATA_BEARER_TOKEN: ${{ secrets.EARTHDATA_BEARER_TOKEN }}
           MONGO_URI: ${{ secrets.MONGO_URI }}
           MONGO_DB: ${{ secrets.MONGO_DB }}
-          DAYS_BACK_LIMIT: ${{ vars.DAYS_BACK_LIMIT }}
-        working-directory: ${{ env.APP_DIR }}
-        shell: bash
+          DAYS_BACK_LIMIT: ${{ vars.DAYS_BACK_LIMIT || 2000 }}
+          SERVICE_PORT: ${{ env.SERVICE_PORT }}
         run: |
-          for var in EARTHDATA_BEARER_TOKEN MONGO_URI MONGO_DB; do
-            if [[ -z "${!var}" ]]; then
-              echo "::error::Environment variable $var must be provided via repository secrets."
-              exit 1
-            fi
-          done
+          docker run -d --name chipnik-monitor \
+            --restart=always \
+            -p ${SERVICE_PORT}:${SERVICE_PORT} \
+            -e EARTHDATA_BEARER_TOKEN \
+            -e MONGO_URI \
+            -e MONGO_DB \
+            -e DAYS_BACK_LIMIT \
+            chipnik-monitor:latest \
+            uvicorn api:app --host 0.0.0.0 --port ${SERVICE_PORT}
 
-          LOG_PATH="${HOME}/chipnik-monitor.log"
-          echo "Starting Chipnik Monitor on port ${SERVICE_PORT}, logging to ${LOG_PATH}"
-
-          nohup env \
-            EARTHDATA_BEARER_TOKEN="${EARTHDATA_BEARER_TOKEN}" \
-            MONGO_URI="${MONGO_URI}" \
-            MONGO_DB="${MONGO_DB}" \
-            DAYS_BACK_LIMIT="${DAYS_BACK_LIMIT:-2000}" \
-            uvicorn api:app --host 0.0.0.0 --port "${SERVICE_PORT}" \
-            > "${LOG_PATH}" 2>&1 &
-
-          echo $! > "${HOME}/chipnik-monitor.pid"
-          echo "Process started with PID $(cat "${HOME}/chipnik-monitor.pid")"
-
-      - name: Verify service
-        shell: bash
+      - name: Health check
         run: |
-          sleep 5
-          if ! pgrep -f "uvicorn api:app" >/dev/null; then
-            echo "::error::Chipnik Monitor service failed to start. Check logs at ${HOME}/chipnik-monitor.log"
-            exit 1
-          fi
-          echo "Chipnik Monitor service is running"
+          sleep 3
+          docker ps --format '{{.Names}}' | grep -q '^chipnik-monitor$'
+          curl -fsS http://127.0.0.1:${{ env.SERVICE_PORT }}/docs >/dev/null
+          echo "Chipnik Monitor container is up"
