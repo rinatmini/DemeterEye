@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
+
+	"log"
+	"math"
 
 	"demetereye/models"
 
@@ -15,6 +17,147 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+func toFloatPtr(v any) *float64 {
+	switch t := v.(type) {
+	case float64:
+		return &t
+	case float32:
+		f := float64(t)
+		return &f
+	case int32:
+		f := float64(t)
+		return &f
+	case int64:
+		f := float64(t)
+		return &f
+	case int:
+		f := float64(t)
+		return &f
+	default:
+		return nil
+	}
+}
+
+func toIntPtr(v any) *int {
+	switch t := v.(type) {
+	case int:
+		return &t
+	case int32:
+		i := int(t)
+		return &i
+	case int64:
+		i := int(t)
+		return &i
+	case float64:
+		i := int(math.Round(t))
+		return &i
+	default:
+		return nil
+	}
+}
+
+func parseRFC3339Ptr(s any) *time.Time {
+	str, ok := s.(string)
+	if !ok || strings.TrimSpace(str) == "" {
+		return nil
+	}
+	if dt, err := time.Parse(time.RFC3339, str); err == nil {
+		return &dt
+	}
+	return nil
+}
+
+func enrichFieldWithLatestReport(ctx context.Context, a *App, f *models.Field) {
+	var doc reportDoc
+	// find the latest report for the field
+	err := a.reports.FindOne(
+		ctx,
+		bson.M{"fieldId": f.ID.Hex()},
+		options.FindOne().SetSort(bson.D{{Key: "updated_at", Value: -1}}),
+	).Decode(&doc)
+	if err != nil {
+		return
+	}
+
+	log.Println("doc", doc)
+
+	switch doc.Status {
+	case "processing":
+		f.Status = models.ReportStatusProcessing
+	case "ready":
+		f.Status = models.ReportStatusReady
+	case "error":
+		f.Status = models.ReportStatusError
+	}
+
+	if len(doc.History) > 0 {
+		h := make([]models.ReportDaily, 0, len(doc.History))
+		for _, it := range doc.History {
+			var d time.Time
+			if ds, ok := it["date"].(string); ok {
+				if dt, err := time.Parse(time.RFC3339, ds); err == nil {
+					d = dt
+				}
+			}
+			if d.IsZero() {
+				continue
+			}
+
+			entry := models.ReportDaily{
+				Date:           d,
+				NDVI:           toFloatPtr(it["ndvi"]),
+				CloudCover:     toIntPtr(it["cloud_cover"]),
+				Collection:     strOrEmpty(it["collection"]),
+				TemperatureDeg: toFloatPtr(it["temperature_deg_c"]),
+				HumidityPct:    toFloatPtr(it["humidity_pct"]),
+				CloudcoverPct:  toFloatPtr(it["cloudcover_pct"]),
+				WindSpeedMps:   toFloatPtr(it["wind_speed_mps"]),
+				ClarityPct:     toFloatPtr(it["clarity_pct"]),
+			}
+			h = append(h, entry)
+		}
+		if len(h) > 0 {
+			f.History = h
+		}
+	}
+
+	if doc.Forecast != nil && len(doc.Forecast) > 0 {
+		ff := &models.ReportForecast{
+			Model: "eurustic",
+		}
+		// year
+		if y, ok := doc.Forecast["year"].(int32); ok {
+			ff.Year = int(y)
+		}
+		if y, ok := doc.Forecast["year"].(int); ok {
+			ff.Year = y
+		}
+		if y, ok := doc.Forecast["year"].(int64); ok {
+			ff.Year = int(y)
+		}
+		if y, ok := doc.Forecast["year"].(float64); ok {
+			ff.Year = int(y)
+		}
+
+		ff.YieldTph = toFloatPtr(doc.Forecast["yieldTph"])
+		ff.NDVIPeak = toFloatPtr(doc.Forecast["ndviPeak"])
+		ff.NDVIPeakAt = parseRFC3339Ptr(doc.Forecast["ndviPeakAt"])
+		if m, ok := doc.Forecast["model"].(string); ok && m != "" {
+			ff.Model = m
+		}
+		ff.Confidence = toFloatPtr(doc.Forecast["confidence"])
+
+		f.Forecast = ff
+	}
+}
+
+func strOrEmpty(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
 
 // handleCreateField inserts a new field with basic GeoJSON validation.
 func (a *App) handleCreateField(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +190,7 @@ func (a *App) handleCreateField(w http.ResponseWriter, r *http.Request) {
 		Name:      req.Name,
 		Geometry:  geom,
 		CreatedAt: time.Now(),
-		Status:    models.FieldStatusProcessing,
+		Status:    models.ReportStatusProcessing,
 	}
 	if req.AreaHa != nil {
 		f.Meta = &models.FieldMeta{AreaHa: req.AreaHa, Notes: req.Notes, Crop: req.Crop}
@@ -103,6 +246,9 @@ func (a *App) handleListFields(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "decode error", http.StatusInternalServerError)
 		return
 	}
+	for i := range out {
+		enrichFieldWithLatestReport(ctx, a, &out[i])
+	}
 	_ = json.NewEncoder(w).Encode(out)
 }
 
@@ -123,6 +269,8 @@ func (a *App) handleGetField(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+
+	enrichFieldWithLatestReport(ctx, a, &f)
 	_ = json.NewEncoder(w).Encode(f)
 }
 
@@ -158,7 +306,7 @@ func (a *App) handleUpdateField(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		set["geometry"] = geom
-		set["status"] = models.FieldStatusProcessing
+		set["status"] = models.ReportStatusProcessing
 	}
 	if req.AreaHa != nil {
 		set["meta.areaHa"] = req.AreaHa // store under nested meta
@@ -182,6 +330,7 @@ func (a *App) handleUpdateField(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	enrichFieldWithLatestReport(ctx, a, &out)
 	_ = json.NewEncoder(w).Encode(out)
 
 	if err == nil {
@@ -219,106 +368,6 @@ func (a *App) handleDeleteField(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(bson.M{"ok": true})
 }
 
-// handleIngestFieldData upserts daily history by date and optionally sets a forecast.
-// It merges per-day records by date key (UTC date), preferring non-nil incoming values.
-// If a forecast is provided, status defaults to "ready" unless explicitly overridden.
-func (a *App) handleIngestFieldData(w http.ResponseWriter, r *http.Request) {
-	uid := mustUserID(r)
-	idStr := chi.URLParam(r, "id")
-	oid, err := primitive.ObjectIDFromHex(idStr)
-	if err != nil {
-		http.Error(w, "bad id", http.StatusBadRequest)
-		return
-	}
-
-	var req ingestFieldReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
-	defer cancel()
-
-	// Load existing history to merge. We only need history, status, forecast.
-	var existing struct {
-		History  []models.HistoryDaily `bson:"history"`
-		Status   models.FieldStatus    `bson:"status"`
-		Forecast *models.FieldForecast `bson:"forecast"`
-	}
-	find := a.fields.FindOne(ctx,
-		bson.M{"_id": oid, "ownerId": uid},
-		options.FindOne().SetProjection(bson.M{"history": 1, "status": 1, "forecast": 1}),
-	)
-	if err := find.Err(); err != nil {
-		// If document not found, FindOne.Err() is non-nil as well.
-		if err == context.DeadlineExceeded {
-			http.Error(w, "timeout", http.StatusGatewayTimeout)
-			return
-		}
-	}
-	if err := find.Decode(&existing); err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-
-	// Build a map of existing history keyed by date (YYYY-MM-DD in UTC).
-	hmap := make(map[string]models.HistoryDaily, len(existing.History))
-	for _, d := range existing.History {
-		key := dateKeyUTC(d.Date)
-		// Normalize stored date to 00:00:00Z to keep one-per-day.
-		d.Date = dateOnlyUTC(d.Date)
-		hmap[key] = d
-	}
-
-	// Merge incoming rows: upsert by date, overriding only non-nil fields.
-	for _, in := range req.History {
-		key := dateKeyUTC(in.Date)
-		in.Date = dateOnlyUTC(in.Date)
-		if curr, ok := hmap[key]; ok {
-			hmap[key] = mergeDaily(curr, in)
-		} else {
-			// Insert as-is.
-			hmap[key] = in
-		}
-	}
-
-	// Flatten and sort by date ascending for deterministic storage.
-	merged := make([]models.HistoryDaily, 0, len(hmap))
-	for _, v := range hmap {
-		merged = append(merged, v)
-	}
-	sort.Slice(merged, func(i, j int) bool { return merged[i].Date.Before(merged[j].Date) })
-
-	// Prepare $set payload.
-	set := bson.M{
-		"history": merged,
-	}
-
-	// Apply forecast if provided.
-	if req.Forecast != nil {
-		req.Forecast.UpdatedAt = time.Now().UTC()
-		set["forecast"] = req.Forecast
-	}
-
-	// Decide status:
-	set["status"] = models.FieldStatusReady
-
-	// Update and return the full document.
-	res := a.fields.FindOneAndUpdate(
-		ctx,
-		bson.M{"_id": oid, "ownerId": uid},
-		bson.M{"$set": set},
-		options.FindOneAndUpdate().SetReturnDocument(options.After),
-	)
-	var out models.Field
-	if err := res.Decode(&out); err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	_ = json.NewEncoder(w).Encode(out)
-}
-
 // ---- helpers ----
 
 // dateOnlyUTC normalizes a timestamp to 00:00:00 UTC (one bucket per day).
@@ -335,7 +384,7 @@ func dateKeyUTC(t time.Time) string {
 
 // mergeDaily overlays non-nil values from 'in' onto 'curr' (same date).
 // Strings: only overwrite when non-empty. Numeric pointers: overwrite when non-nil.
-func mergeDaily(curr models.HistoryDaily, in models.HistoryDaily) models.HistoryDaily {
+func mergeDaily(curr models.ReportDaily, in models.ReportDaily) models.ReportDaily {
 	out := curr
 	out.Date = in.Date // normalized already
 
@@ -348,8 +397,8 @@ func mergeDaily(curr models.HistoryDaily, in models.HistoryDaily) models.History
 	if in.Collection != "" {
 		out.Collection = in.Collection
 	}
-	if in.TemperatureDegC != nil {
-		out.TemperatureDegC = in.TemperatureDegC
+	if in.TemperatureDeg != nil {
+		out.TemperatureDeg = in.TemperatureDeg
 	}
 	if in.HumidityPct != nil {
 		out.HumidityPct = in.HumidityPct

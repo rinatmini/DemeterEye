@@ -11,11 +11,12 @@ import (
 )
 
 type App struct {
-	cfg    Config
-	mongo  *mongo.Client
-	db     *mongo.Database
-	users  *mongo.Collection
-	fields *mongo.Collection
+	cfg     Config
+	mongo   *mongo.Client
+	db      *mongo.Database
+	users   *mongo.Collection
+	fields  *mongo.Collection
+	reports *mongo.Collection
 }
 
 func newApp(ctx context.Context, cfg Config) (*App, error) {
@@ -26,11 +27,12 @@ func newApp(ctx context.Context, cfg Config) (*App, error) {
 	db := client.Database(cfg.MongoDB)
 
 	app := &App{
-		cfg:    cfg,
-		mongo:  client,
-		db:     db,
-		users:  db.Collection("users"),
-		fields: db.Collection("fields"),
+		cfg:     cfg,
+		mongo:   client,
+		db:      db,
+		users:   db.Collection("users"),
+		fields:  db.Collection("fields"),
+		reports: db.Collection("reports"),
 	}
 	// Indexes
 	if _, err := app.users.Indexes().CreateOne(ctx, mongo.IndexModel{

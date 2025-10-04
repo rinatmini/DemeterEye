@@ -1,8 +1,8 @@
 package main
 
 import (
-	"demetereye/models"
 	"encoding/json"
+	"time"
 )
 
 // Request/response DTOs. Keep them minimal and explicit.
@@ -40,15 +40,6 @@ type YieldEntry struct {
 	Notes    string   `json:"notes,omitempty"`
 }
 
-// ingestFieldReq is used by the processor to submit daily history and an optional forecast.
-type ingestFieldReq struct {
-	// Daily history rows to upsert by date (matching models.HistoryDaily fields).
-	History []models.HistoryDaily `json:"history"`
-
-	// Optional forecast to set for the current season. UpdatedAt is set server-side.
-	Forecast *models.FieldForecast `json:"forecast,omitempty"`
-}
-
 // Payload we send to Processor /reports
 type processorReportReq struct {
 	FieldID   string          `json:"fieldId"`             // field id
@@ -60,4 +51,15 @@ type processorReportReq struct {
 type processorReportResp struct {
 	OperationID string `json:"operation_id,omitempty"` // if processor returns a task id
 	Status      string `json:"status,omitempty"`       // e.g., "queued"
+}
+
+type reportDoc struct {
+	Status       string           `bson:"status"`
+	CreatedAt    time.Time        `bson:"created_at"`
+	UpdatedAt    time.Time        `bson:"updated_at"`
+	YieldType    string           `bson:"yieldType"`
+	FieldID      string           `bson:"fieldId"`
+	History      []map[string]any `bson:"history"`
+	Forecast     map[string]any   `bson:"forecast"`
+	ErrorMessage *string          `bson:"errorMessage"`
 }

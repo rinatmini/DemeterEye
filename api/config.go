@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"os"
 )
 
@@ -21,9 +20,7 @@ func mustConfig() Config {
 		JWTSecret:    getenv("JWT_SECRET", "change_me"),
 		Port:         getenv("PORT", "8080"),
 	}
-	if cfg.JWTSecret == "change_me" {
-		log.Println("[WARN] Using default JWT secret, override in .env for security")
-	}
+
 	return cfg
 }
 
