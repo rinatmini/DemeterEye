@@ -29,10 +29,10 @@ export default function MetricsChart({ history = [] }) {
   const [show, setShow] = useState({
     ndvi: true,
     temperature_deg_c: true,
-    wind_speed_mps: false,
-    cloudcover_pct: false,
-    clarity_pct: false,
-    humidity_pct: false,
+    wind_speed_mps: true,
+    cloudcover_pct: true,
+    clarity_pct: true,
+    humidity_pct: true,
   });
 
   const yLeftLabel = show.ndvi ? "NDVI" : "";
