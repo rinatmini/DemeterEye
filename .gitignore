@@ -3,3 +3,4 @@ __pycache__/*
 .cache
 */venv/
 */__pycache__
+chipnik_monitor/on-premise/build.sh
