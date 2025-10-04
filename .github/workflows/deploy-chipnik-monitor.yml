@@ -59,6 +59,6 @@ jobs:
             --region "$REGION" \
             --allow-unauthenticated \
             --min-instances 0 --max-instances 2 \
-            --memory 512Mi --cpu 4 \
+            --memory 512Mi --cpu 2 \
             --no-cpu-throttling \
-            --set-env-vars EARTHDATA_BEARER_TOKEN=${EARTHDATA_BEARER_TOKEN},MONGO_URI=${MONGO_URI},MONGO_DB=${MONGO_DB},DAYS_BACK_LIMIT=${DAYS_BACK_LIMIT},WORKER_CAP=4
+            --set-env-vars EARTHDATA_BEARER_TOKEN=${EARTHDATA_BEARER_TOKEN},MONGO_URI=${MONGO_URI},MONGO_DB=${MONGO_DB},DAYS_BACK_LIMIT=${DAYS_BACK_LIMIT},WORKER_CAP=2
