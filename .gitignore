@@ -5,3 +5,4 @@ __pycache__/*
 */__pycache__
 chipnik_monitor/on-premise/build.sh
 chipnik_monitor/models
+.vs
