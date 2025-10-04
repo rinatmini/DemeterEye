@@ -192,7 +192,8 @@ func (a *App) handleCreateField(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: time.Now(),
 		Status:    models.ReportStatusProcessing,
 	}
-	if req.AreaHa != nil {
+	// Create meta if any of its fields are provided
+	if req.AreaHa != nil || strings.TrimSpace(req.Notes) != "" || strings.TrimSpace(req.Crop) != "" {
 		f.Meta = &models.FieldMeta{AreaHa: req.AreaHa, Notes: req.Notes, Crop: req.Crop}
 	}
 
@@ -217,14 +218,17 @@ func (a *App) handleCreateField(w http.ResponseWriter, r *http.Request) {
 	f.ID = res.InsertedID.(primitive.ObjectID)
 	_ = json.NewEncoder(w).Encode(f)
 
-	if err == nil {
-		// send update to processor
-		a.PostProcessorReports(ctx, processorReportReq{
+	// send update to processor only if we know the crop/yield type
+	yt := strings.TrimSpace(req.Crop)
+	if yt != "" {
+		if _, perr := a.PostProcessorReports(ctx, processorReportReq{
 			FieldID:   f.ID.Hex(),
 			GeoJSON:   req.Geometry,
-			YieldType: req.Crop,
+			YieldType: yt,
 			Yields:    req.Yields,
-		})
+		}); perr != nil {
+			log.Println("processor error (create)", perr)
+		}
 	}
 }
 
@@ -274,7 +278,7 @@ func (a *App) handleGetField(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(f)
 }
 
-// handleUpdateField updates name/geometry and meta.areaHa if provided.
+// handleUpdateField updates name/geometry/yields and meta.areaHa if provided.
 func (a *App) handleUpdateField(w http.ResponseWriter, r *http.Request) {
 	uid := mustUserID(r)
 	idStr := chi.URLParam(r, "id")
@@ -311,6 +315,20 @@ func (a *App) handleUpdateField(w http.ResponseWriter, r *http.Request) {
 	if req.AreaHa != nil {
 		set["meta.areaHa"] = req.AreaHa // store under nested meta
 	}
+	if strings.TrimSpace(req.Notes) != "" {
+		set["meta.notes"] = req.Notes
+	}
+	if strings.TrimSpace(req.Crop) != "" {
+		set["meta.crop"] = req.Crop
+	}
+	if len(req.Yields) > 0 {
+		// Convert to models.YieldEntry so correct bson field names are used
+		ys := make([]models.YieldEntry, len(req.Yields))
+		for i, y := range req.Yields {
+			ys[i] = models.YieldEntry{Year: y.Year, ValueTph: y.ValueTph, Unit: y.Unit, Notes: y.Notes}
+		}
+		set["yields"] = ys
+	}
 	if len(set) == 0 {
 		http.Error(w, "nothing to update", http.StatusBadRequest)
 		return
@@ -333,14 +351,23 @@ func (a *App) handleUpdateField(w http.ResponseWriter, r *http.Request) {
 	enrichFieldWithLatestReport(ctx, a, &out)
 	_ = json.NewEncoder(w).Encode(out)
 
-	if err == nil {
-		// send update to processor
-		a.PostProcessorReports(ctx, processorReportReq{
+	// send update to processor only if geometry is provided and we know yieldType
+	yt2 := strings.TrimSpace(req.Crop)
+	if yt2 == "" && out.Meta != nil {
+		yt2 = strings.TrimSpace(out.Meta.Crop)
+	}
+	if len(req.Geometry) > 0 && yt2 != "" {
+		log.Println("req", req)
+		if _, perr := a.PostProcessorReports(ctx, processorReportReq{
 			FieldID:   out.ID.Hex(),
 			GeoJSON:   req.Geometry,
-			YieldType: req.Crop,
+			YieldType: yt2,
 			Yields:    req.Yields,
-		})
+		}); perr != nil {
+			log.Println("processor error (update)", perr)
+		}
+	} else {
+		log.Println("skip PostProcessorReports: missing geometry or yieldType")
 	}
 }
 
