@@ -13,6 +13,11 @@ try:
     from rasterio.session import AWSSession  # type: ignore
 except ImportError:
     AWSSession = None  # type: ignore
+else:
+    try:
+        import boto3  # type: ignore  # noqa: F401
+    except ImportError:
+        AWSSession = None  # type: ignore
 from shapely.geometry import shape, box, mapping
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
@@ -55,7 +60,7 @@ DEFAULT_RADIUS_KM = 6.0
 
 ENABLE_EVI = os.getenv("ENABLE_EVI", "").strip().lower() in {"1", "true", "yes", "on"}
 
-DEFAULT_DAYS_BACK_LIMIT = 2000
+DEFAULT_DAYS_BACK_LIMIT = 730
 _days_back_raw = os.getenv("DAYS_BACK_LIMIT", "").strip()
 if _days_back_raw:
     try:
@@ -265,7 +270,7 @@ def load_stac_cache(cache_path: Path) -> Optional[pd.DataFrame]:
         df = df.sort_values("datetime")
     return df
 
-def store_stac_cache(cache_path: Path, records: List[dict]) -> None:
+def store_stac_cache(cache_path: Path, records: List[dict], bbox: List[float]) -> None:
     try:
         serialisable: List[dict] = []
         for record in records:
@@ -294,9 +299,88 @@ def store_stac_cache(cache_path: Path, records: List[dict]) -> None:
                 "blue_url": record.get("blue_url"),
             })
 
-        cache_path.write_text(json.dumps({"records": serialisable}), encoding="utf-8")
+        cache_path.write_text(json.dumps({"records": serialisable, "bbox": bbox}), encoding="utf-8")
     except Exception:
         logger.exception("Failed to persist STAC cache at %s", cache_path)
+
+def list_stac_cache_files() -> List[Path]:
+    """
+    List all STAC cache files in the cache directory.
+    
+    Returns:
+    List[Path]: List of paths to STAC cache files
+    """
+    stac_cache_dir = CACHE_ROOT / "stac"
+    if not stac_cache_dir.exists():
+        return []
+    
+    return list(stac_cache_dir.glob("*.json"))
+
+def load_cached_data_with_region(cache_file_path: Path) -> Tuple[pd.DataFrame, Optional[dict], Optional[List[float]]]:
+    """
+    Load cached STAC data with region information including bbox coordinates.
+    
+    Parameters:
+    cache_file_path (Path): Path to the STAC cache file
+    
+    Returns:
+    Tuple[pd.DataFrame, Optional[dict], Optional[List[float]]]: 
+        - DataFrame with cached records
+        - Region info dictionary with calculated spatial metrics
+        - Bbox coordinates [min_lon, min_lat, max_lon, max_lat]
+    """
+    try:
+        # Load the cached data
+        cached_df = load_stac_cache(cache_file_path)
+        
+        if cached_df is None or cached_df.empty:
+            return pd.DataFrame(), None, None
+        
+        # Load raw JSON to get bbox
+        raw_data = json.loads(cache_file_path.read_text(encoding="utf-8"))
+        bbox = raw_data.get("bbox")
+        
+        if not bbox or len(bbox) != 4:
+            logger.warning("No valid bbox found in cache file %s", cache_file_path)
+            return cached_df, None, None
+        
+        # Calculate region info from bbox
+        min_lon, min_lat, max_lon, max_lat = bbox
+        
+        # Calculate center coordinates
+        center_lon = (min_lon + max_lon) / 2
+        center_lat = (min_lat + max_lat) / 2
+        
+        # Calculate dimensions in degrees
+        width_deg = max_lon - min_lon
+        height_deg = max_lat - min_lat
+        
+        # Approximate area calculation (rough estimation)
+        # Using spherical earth approximation
+        lat_rad = math.radians(center_lat)
+        lon_deg_to_km = 111.32 * math.cos(lat_rad)  # km per degree longitude at this latitude
+        lat_deg_to_km = 110.54  # km per degree latitude (approximately constant)
+        
+        width_km = width_deg * lon_deg_to_km
+        height_km = height_deg * lat_deg_to_km
+        area_km2 = width_km * height_km
+        
+        region_info = {
+            "center_lon": center_lon,
+            "center_lat": center_lat,
+            "width_deg": width_deg,
+            "height_deg": height_deg,
+            "width_km": width_km,
+            "height_km": height_km,
+            "area_km2": area_km2,
+            "bbox": bbox
+        }
+        
+        return cached_df, region_info, bbox
+        
+    except Exception as e:
+        logger.exception("Failed to load cached data with region info from %s: %s", cache_file_path, e)
+        return pd.DataFrame(), None, None
 
 def load_token_from_env() -> str:
     token = os.getenv("EARTHDATA_BEARER_TOKEN")
@@ -807,7 +891,7 @@ def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
     logger.info("search_hls_data: %s items after filtering", len(df))
     if not df.empty:
         df = df.sort_values("datetime")
-    store_stac_cache(cache_path, records)
+    store_stac_cache(cache_path, records, bbox)
     logger.debug("search_hls_data: cached %s items at %s", len(df), cache_path.name)
     return df
 
@@ -1225,6 +1309,7 @@ if search_button:
                     if worker_cap_raw:
                         try:
                             worker_cap = max(1, int(worker_cap_raw))
+                            logger.info(f"WORKER_CAP={worker_cap_raw}")
                         except ValueError:
                             logger.warning("Invalid WORKER_CAP=%s; falling back to default", worker_cap_raw)
                             worker_cap = default_worker_cap
