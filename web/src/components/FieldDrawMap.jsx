@@ -1,47 +1,58 @@
 // src/components/FieldDrawMap.jsx
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import {
   MapContainer,
   TileLayer,
   FeatureGroup,
   LayersControl,
   LayerGroup,
+  GeoJSON,
+  Pane,
 } from "react-leaflet";
 import { EditControl } from "react-leaflet-draw";
 import L from "leaflet";
 
 export default function FieldDrawMap({
-  value,
+  value,                       // GeoJSON geometry: Polygon | MultiPolygon
   onChange,
   initialCenter = [47.4554598, -122.2208032],
   initialZoom = 14,
   rememberView = true,
   fitToGeometry = true,
   className = "w-full h-[70vh] rounded-xl border",
-  mode = "draw",
+  mode = "view",               // "view" | "edit" | "draw"
 }) {
   const fgRef = useRef(null);
   const mapRef = useRef(null);
+  const [mapReady, setMapReady] = useState(false);
   const LSKEY = "demetereye.mapView";
 
+  // Seed FG with current geometry and fit bounds when map is ready
   useEffect(() => {
     const fg = fgRef.current;
     if (!fg) return;
+
     fg.clearLayers();
     if (value) {
       const gj = L.geoJSON({ type: "Feature", geometry: value });
       gj.eachLayer((l) => fg.addLayer(l));
+
       if (fitToGeometry && mapRef.current) {
-        mapRef.current.fitBounds(gj.getBounds(), { padding: [24, 24] });
+        const b = gj.getBounds();
+        if (b.isValid()) {
+          mapRef.current.fitBounds(b, { padding: [24, 24] });
+        }
       }
     }
-  }, [value, fitToGeometry]);
+  }, [value, fitToGeometry, mapReady]);
 
   const onMapCreated = (map) => {
     mapRef.current = map;
 
-    let center = initialCenter,
-      zoom = initialZoom;
+    // restore saved view; actual fit to geometry will happen in the effect above
+    let center = initialCenter;
+    let zoom = initialZoom;
+
     if (rememberView) {
       try {
         const saved = JSON.parse(localStorage.getItem(LSKEY) || "null");
@@ -62,6 +73,10 @@ export default function FieldDrawMap({
         );
       });
     }
+
+    // Fix layout race on first paint
+    setTimeout(() => map.invalidateSize(), 0);
+    setMapReady(true);
   };
 
   const reportFromGroup = () => {
@@ -80,11 +95,40 @@ export default function FieldDrawMap({
   const onEdited = () => reportFromGroup();
   const onDeleted = () => onChange?.(null);
 
-  const FieldDrawMapOptions = mode !== "draw" && {
-    edit: false,
-    remove: false,
-    selectedPathOptions: { maintainColor: true },
-  };
+  // Toolbar options by mode
+  const editControlExtra =
+    mode === "view"
+      ? { edit: false, remove: false, selectedPathOptions: { maintainColor: true } }
+      : { selectedPathOptions: { maintainColor: true } };
+
+  const drawOptions =
+    mode === "draw"
+      ? {
+          polygon: {
+            allowIntersection: false,
+            showArea: true,
+            shapeOptions: { color: "#10b981" },
+          },
+          marker: false,
+          circle: false,
+          circlemarker: false,
+          rectangle: false,
+          polyline: false,
+        }
+      : {
+          polygon: false,
+          marker: false,
+          circle: false,
+          circlemarker: false,
+          rectangle: false,
+          polyline: false,
+        };
+
+  // Force re-render of GeoJSON overlay when geometry changes
+  const geojsonKey = useMemo(
+    () => (value ? JSON.stringify(value).slice(0, 200) : "empty"),
+    [value]
+  );
 
   return (
     <MapContainer
@@ -101,6 +145,7 @@ export default function FieldDrawMap({
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
         </LayersControl.BaseLayer>
+
         <LayersControl.BaseLayer name="Satellite (Esri)" checked>
           <LayerGroup>
             <TileLayer
@@ -115,36 +160,25 @@ export default function FieldDrawMap({
         </LayersControl.BaseLayer>
       </LayersControl>
 
+      {/* Always draw current geometry on top (view & edit) */}
+      {value && (
+        <Pane name="vector-top" style={{ zIndex: 650 }}>
+          <GeoJSON
+            key={geojsonKey}
+            data={{ type: "Feature", geometry: value }}
+            style={{ color: "#10b981", weight: 2, fillOpacity: 0.2 }}
+          />
+        </Pane>
+      )}
+
       <FeatureGroup ref={fgRef}>
         <EditControl
           position="topleft"
-          draw={
-            mode === "draw"
-              ? {
-                  polygon: {
-                    allowIntersection: false,
-                    showArea: true,
-                    shapeOptions: { color: "#10b981" },
-                  },
-                  marker: false,
-                  circle: false,
-                  circlemarker: false,
-                  rectangle: false,
-                  polyline: false,
-                }
-              : {
-                  polygon: false,
-                  marker: false,
-                  circle: false,
-                  circlemarker: false,
-                  rectangle: false,
-                  polyline: false,
-                }
-          }
+          draw={drawOptions}
           onCreated={onCreated}
           onEdited={onEdited}
           onDeleted={onDeleted}
-          {...FieldDrawMapOptions}
+          {...editControlExtra}
         />
       </FeatureGroup>
     </MapContainer>
