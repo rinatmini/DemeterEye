@@ -21,6 +21,13 @@ export default function CreateField() {
   const [overrideArea, setOverrideArea] = useState(false);
   const [photo, setPhoto] = useState("");
   const [crop, setCrop] = useState("");
+  const CROP_OPTIONS = [
+    "Potato",
+    "Soybean",
+    "Sugar Beet",
+    "Tomato",
+    "Wheat",
+  ];
   const [notes, setNotes] = useState("");
   const [geometry, setGeometry] = useState(null);
   const [yields, setYields] = useState([
@@ -66,6 +73,11 @@ export default function CreateField() {
     });
   };
   const addYieldRow = () => {
+
+    if (yields.length === 0) {
+      setYields((p) => [...p, { year: new Date().getFullYear(), valueTph: "", unit: "t/ha" }]);
+      return;
+    }
     const prevYear = yields[yields.length - 1].year - 1;
     setYields((p) => [...p, { year: prevYear, valueTph: "", unit: "t/ha" }]);
   }
@@ -74,8 +86,8 @@ export default function CreateField() {
 
   const submit = async () => {
     setError("");
-    if (!name || !geometry) {
-      setError("Name and polygon are required");
+    if (!name || !crop || !geometry) {
+      setError("Name, crop and polygon are required");
       return;
     }
     // normalize yields: keep only rows with both year & value
@@ -196,19 +208,25 @@ export default function CreateField() {
             </label>
           </div>
 
-          <input
-            className="rounded-xl border px-3 py-2"
-            placeholder="Crop"
+          <select
+            className="rounded-xl border px-3 py-2 bg-white"
             value={crop}
             onChange={(e) => setCrop(e.target.value)}
-          />
+          >
+            <option value="">Select crop…</option>
+            {CROP_OPTIONS.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
 
-          <input
+          {/* <input
             className="w-full rounded-xl border px-3 py-2"
             placeholder="Photo URL"
             value={photo}
             onChange={(e) => setPhoto(e.target.value)}
-          />
+          /> */}
 
           <textarea
             className="w-full rounded-xl border px-3 py-2"
