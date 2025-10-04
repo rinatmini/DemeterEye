@@ -1,0 +1,52 @@
+name: Deploy API
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "api/**"
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  PROJECT_ID: demetereye
+  REGION: us-central1
+  SERVICE_NAME: demetereye-api
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure gcloud defaults
+        run: |
+          gcloud config set project "$PROJECT_ID"
+          gcloud config set run/region "$REGION"
+
+      - name: Deploy API service
+        env:
+          MONGO_DB: demetereye
+          PROCESSOR_URL: https://demetereye-monitor-1060536779509.us-central1.run.app
+        working-directory: api
+        run: |
+          gcloud run deploy "$SERVICE_NAME" \
+            --source . \
+            --region "$REGION" \
+            --allow-unauthenticated \
+            --min-instances 0 --max-instances 2 \
+            --memory 512Mi --cpu 1 \
+            --port 8080 \
+            --set-env-vars MONGO_DB=${MONGO_DB},PROCESSOR_URL=${PROCESSOR_URL} \
+            --set-secrets MONGO_URI=MONGO_URI:latest,JWT_SECRET=JWT_SECRET:latest

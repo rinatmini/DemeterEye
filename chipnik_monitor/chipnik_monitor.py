@@ -47,6 +47,20 @@ DEFAULT_MIN_LAT = DEFAULT_CENTER_LAT - DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_MAX_LAT = DEFAULT_CENTER_LAT + DEFAULT_CORNER_HALF_WIDTH_DEG
 DEFAULT_RADIUS_KM = 6.0
 
+ENABLE_EVI = os.getenv("ENABLE_EVI", "").strip().lower() in {"1", "true", "yes", "on"}
+
+DEFAULT_DAYS_BACK_LIMIT = 2000
+_days_back_raw = os.getenv("DAYS_BACK_LIMIT", "").strip()
+if _days_back_raw:
+    try:
+        DAYS_BACK_LIMIT = int(_days_back_raw)
+    except ValueError:
+        logger.warning("Invalid DAYS_BACK_LIMIT=%s; falling back to default", _days_back_raw)
+        DAYS_BACK_LIMIT = DEFAULT_DAYS_BACK_LIMIT
+else:
+    DAYS_BACK_LIMIT = DEFAULT_DAYS_BACK_LIMIT
+DAYS_BACK_LIMIT = max(100, min(4500, DAYS_BACK_LIMIT))
+
 APP_NAME = "HLS Crop Monitor"
 APP_LOGO_PATH = Path("media") / "small_logo.png"
 
@@ -179,7 +193,7 @@ STAC_CACHE_VERSION = "1"
 STAC_PAGE_SIZE = 200
 STAC_MAX_ITEMS = 2000
 
-STAC_CACHE_TTL_SECONDS = 3600
+STAC_CACHE_TTL_SECONDS = 3600 * 24 * 7
 
 def get_stac_cache_path(bbox: List[float], start: str, end: str, max_cc: int,
                         dataset_type: str, token: str) -> Path:
@@ -452,8 +466,8 @@ with st.sidebar:
     days_back = st.slider(
         "Days back",
         min_value=100,
-        max_value=4500,
-        value=4500,
+        max_value=DAYS_BACK_LIMIT,
+        value=DAYS_BACK_LIMIT,
         step=30
     )
 
@@ -598,7 +612,7 @@ def build_yearly_crop_rankings(ndvi_df: pd.DataFrame, crop_df: pd.DataFrame) -> 
     return summary
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600 * 24 * 7)
 def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
                     dataset_type: str, _token: str) -> pd.DataFrame:
     """Search HLS scenes via the STAC API"""
@@ -1088,11 +1102,6 @@ if search_button:
             # Output tabs
             tab1, tab2, tab3 = st.tabs(["NDVI time series", "Map", "Data table"])
 
-
-
-
-
-
             with tab1:
                 st.subheader("NDVI time series")
 
@@ -1101,7 +1110,9 @@ if search_button:
 
                 results: List[Dict[str, Any]] = []
                 row_tuples = list(df.itertuples(index=False))
-                index_types = [IndexType.NDVI, IndexType.EVI]
+                index_types = [IndexType.NDVI]
+                if ENABLE_EVI:
+                    index_types.append(IndexType.EVI)
                 
                 if row_tuples:
                     worker = partial(compute_index_for_row, index_types=index_types, bbox=bbox, token=earthdata_token)
@@ -1163,18 +1174,19 @@ if search_button:
                         secondary_y=False,
                     )
 
-                    fig.add_trace(
-                        go.Scatter(
-                            x=ndvi_df['date'],
-                            y=ndvi_df['mean_EVI'],
-                            mode="lines+markers",
-                            name="EVI",
-                            line=dict(color="blue", width=2),
-                            marker=dict(size=8),
-                            hovertemplate="<b>Date:</b> %{x}<br><b>EVI:</b> %{y:.3f}<extra></extra>",
-                        ),
-                        secondary_y=False,
-                    )
+                    if ENABLE_EVI and 'mean_EVI' in ndvi_df:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=ndvi_df['date'],
+                                y=ndvi_df['mean_EVI'],
+                                mode="lines+markers",
+                                name="EVI",
+                                line=dict(color="blue", width=2),
+                                marker=dict(size=8),
+                                hovertemplate="<b>Date:</b> %{x}<br><b>EVI:</b> %{y:.3f}<extra></extra>",
+                            ),
+                            secondary_y=False,
+                        )
 
                     fig.add_hline(
                         y=0.3,

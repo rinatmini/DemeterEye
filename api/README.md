@@ -11,3 +11,5 @@ gcloud run deploy demetereye-api \
   --set-env-vars MONGO_DB=demetereye \
   --set-secrets MONGO_URI=MONGO_URI:latest,JWT_SECRET=JWT_SECRET:latest \
   --set-env-vars PROCESSOR_URL=https://demetereye-monitor-1060536779509.us-central1.run.app
+
+

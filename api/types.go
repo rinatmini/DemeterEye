@@ -51,6 +51,7 @@ type ingestFieldReq struct {
 
 // Payload we send to Processor /reports
 type processorReportReq struct {
+	FieldID   string          `json:"fieldId"`             // field id
 	GeoJSON   json.RawMessage `json:"geojson"`             // entire Feature or Geometry
 	YieldType string          `json:"yieldType,omitempty"` // e.g., "Potato"
 	Yields    []YieldEntry    `json:"yields,omitempty"`

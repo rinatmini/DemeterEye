@@ -1,0 +1,52 @@
+name: Deploy Chipnik Monitor API
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "chipnik_monitor/**"
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  PROJECT_ID: demetereye
+  REGION: us-central1
+  SERVICE_NAME: demetereye-monitor
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure gcloud defaults
+        run: |
+          gcloud config set project "$PROJECT_ID"
+          gcloud config set run/region "$REGION"
+
+      - name: Deploy to Cloud Run
+        env:
+          EARTHDATA_BEARER_TOKEN: ${{ secrets.EARTHDATA_BEARER_TOKEN }}
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          MONGO_DB: ${{ secrets.MONGO_DB }}
+        working-directory: chipnik_monitor
+        run: |
+          gcloud run deploy "$SERVICE_NAME" \
+            --source . \
+            --region "$REGION" \
+            --allow-unauthenticated \
+            --min-instances 0 --max-instances 2 \
+            --memory 512Mi --cpu 1 \
+            --no-cpu-throttling \
+            --set-env-vars EARTHDATA_BEARER_TOKEN=${EARTHDATA_BEARER_TOKEN},MONGO_URI=${MONGO_URI},MONGO_DB=${MONGO_DB}

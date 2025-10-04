@@ -17,6 +17,7 @@ Chipnik Monitor provides both a Streamlit dashboard and a FastAPI service for an
    - `EARTHDATA_BEARER_TOKEN`
    - `MONGO_URI`
    - `MONGO_DB`
+   - `DAYS_BACK_LIMIT` (optional, defaults to 2000)
 
 ## Running the Streamlit App
 From the `chipnik_monitor/` directory run:
