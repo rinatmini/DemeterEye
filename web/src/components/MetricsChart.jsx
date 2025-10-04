@@ -8,7 +8,6 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
-  Brush,
 } from "recharts";
 
 // Unified chart: shows NDVI on left axis, weather metrics on right axis with toggles
@@ -21,11 +20,36 @@ export default function MetricsChart({ history = [] }) {
     clarity_pct: "#eab308", // yellow
     humidity_pct: "#06b6d4", // cyan
   };
+
+  // Normalize and keep only rows with date
   const chartData = useMemo(
     () => (history || []).filter((d) => d?.date),
     [history]
   );
 
+  // --- Year chips ---
+  // Collect unique years present in the data, sort desc (2025, 2024, ...)
+  const years = useMemo(() => {
+    const set = new Set();
+    for (const d of chartData) {
+      const y = getYear(d.date);
+      if (Number.isFinite(y)) set.add(y);
+    }
+    return Array.from(set).sort((a, b) => b - a);
+  }, [chartData]);
+
+  // Default to the latest year if available, else "All"
+  const [year, setYear] = useState(
+    years.length ? years[0] : "All"
+  );
+
+  // Data filtered by selected year (or all)
+  const dataByYear = useMemo(() => {
+    if (year === "All") return chartData;
+    return chartData.filter((d) => getYear(d.date) === year);
+  }, [chartData, year]);
+
+  // --- Series toggles ---
   const [show, setShow] = useState({
     ndvi: true,
     temperature_deg_c: true,
@@ -45,7 +69,7 @@ export default function MetricsChart({ history = [] }) {
     if (rightKeys.length === 0) return [0, "auto"];
     let lo = Infinity,
       hi = -Infinity;
-    for (const row of chartData) {
+    for (const row of dataByYear) {
       for (const k of rightKeys) {
         const v = row[k];
         if (typeof v === "number" && !Number.isNaN(v)) {
@@ -57,10 +81,26 @@ export default function MetricsChart({ history = [] }) {
     if (!Number.isFinite(lo) || !Number.isFinite(hi)) return [0, "auto"];
     const pad = (hi - lo) * 0.05 || 1;
     return [round(lo - pad), round(hi + pad)];
-  }, [chartData, rightKeys]);
+  }, [dataByYear, rightKeys]);
 
   return (
-    <div className="h-[340px] w-full">
+    <div className="w-full">
+      {/* Year chips row */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        {years.map((y) => (
+          <Chip key={y} active={year === y} onClick={() => setYear(y)}>
+            {y}
+          </Chip>
+        ))}
+        {/* Optional "All" chip when multiple years exist */}
+        {years.length > 1 && (
+          <Chip active={year === "All"} onClick={() => setYear("All")}>
+            All
+          </Chip>
+        )}
+      </div>
+
+      {/* Metric toggles */}
       <div className="flex gap-2 text-xs mb-2 flex-wrap">
         <Toggle
           label="NDVI"
@@ -102,112 +142,132 @@ export default function MetricsChart({ history = [] }) {
         />
       </div>
 
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart
-          data={chartData}
-          margin={{ top: 10, right: 20, left: 0, bottom: 10 }}
-        >
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis
-            dataKey="date"
-            tick={{ fontSize: 12 }}
-            tickFormatter={formatDate}
-            minTickGap={24}
-          />
-          <YAxis
-            yAxisId="left"
-            tick={{ fontSize: 12 }}
-            domain={[0, 1]}
-            allowDecimals
-            label={{ value: yLeftLabel, angle: -90, position: "insideLeft" }}
-          />
-          <YAxis
-            yAxisId="right"
-            orientation="right"
-            tick={{ fontSize: 12 }}
-            domain={rightDomain}
-            allowDecimals
-          />
-
-          <Tooltip content={<HistoryTooltip />} />
-          <Legend />
-          <Brush dataKey="date" height={20} stroke="#ccc" travellerWidth={8} />
-
-          {show.ndvi && (
-            <Line
-              type="monotone"
-              dataKey="ndvi"
+      {/* Chart */}
+      <div className="h-[340px] w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart
+            data={dataByYear}
+            margin={{ top: 10, right: 20, left: 0, bottom: 10 }}
+          >
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 12 }}
+              tickFormatter={formatDate}
+              minTickGap={24}
+            />
+            <YAxis
               yAxisId="left"
-              name="NDVI"
-              dot={false}
-              strokeWidth={2}
-              stroke={COLORS.ndvi}
-              connectNulls
+              tick={{ fontSize: 12 }}
+              domain={[0, 1]}
+              allowDecimals
+              tickFormatter={fmtNDVI}
+              label={{ value: yLeftLabel, angle: -90, position: "insideLeft" }}
             />
-          )}
-          {show.temperature_deg_c && (
-            <Line
-              type="monotone"
-              dataKey="temperature_deg_c"
+            <YAxis
               yAxisId="right"
-              name="Temp (°C)"
-              dot={false}
-              strokeWidth={1.5}
-              stroke={COLORS.temperature_deg_c}
-              connectNulls
+              orientation="right"
+              tick={{ fontSize: 12 }}
+              domain={rightDomain}
+              allowDecimals
+              tickFormatter={fmtNum2}
             />
-          )}
-          {show.wind_speed_mps && (
-            <Line
-              type="monotone"
-              dataKey="wind_speed_mps"
-              yAxisId="right"
-              name="Wind (m/s)"
-              dot={false}
-              strokeWidth={1.5}
-              stroke={COLORS.wind_speed_mps}
-              connectNulls
-            />
-          )}
-          {show.cloudcover_pct && (
-            <Line
-              type="monotone"
-              dataKey="cloudcover_pct"
-              yAxisId="right"
-              name="Cloud (%)"
-              dot={false}
-              strokeWidth={1.5}
-              stroke={COLORS.cloudcover_pct}
-              connectNulls
-            />
-          )}
-          {show.clarity_pct && (
-            <Line
-              type="monotone"
-              dataKey="clarity_pct"
-              yAxisId="right"
-              name="Sun (%)"
-              dot={false}
-              strokeWidth={1.5}
-              stroke={COLORS.clarity_pct}
-              connectNulls
-            />
-          )}
-          {show.humidity_pct && (
-            <Line
-              type="monotone"
-              dataKey="humidity_pct"
-              yAxisId="right"
-              name="Humidity (%)"
-              dot={false}
-              strokeWidth={1.5}
-              stroke={COLORS.humidity_pct}
-              connectNulls
-            />
-          )}
-        </LineChart>
-      </ResponsiveContainer>
+            <Tooltip content={<HistoryTooltip />} />
+            <Legend />
+            {/* Brush removed */}
+
+            {show.ndvi && (
+              <Line
+                type="monotone"
+                dataKey="ndvi"
+                yAxisId="left"
+                name="NDVI"
+                dot={false}
+                strokeWidth={2}
+                stroke={COLORS.ndvi}
+                connectNulls
+              />
+            )}
+            {show.temperature_deg_c && (
+              <Line
+                type="monotone"
+                dataKey="temperature_deg_c"
+                yAxisId="right"
+                name="Temp (°C)"
+                dot={false}
+                strokeWidth={1.5}
+                stroke={COLORS.temperature_deg_c}
+                connectNulls
+              />
+            )}
+            {show.wind_speed_mps && (
+              <Line
+                type="monotone"
+                dataKey="wind_speed_mps"
+                yAxisId="right"
+                name="Wind (m/s)"
+                dot={false}
+                strokeWidth={1.5}
+                stroke={COLORS.wind_speed_mps}
+                connectNulls
+              />
+            )}
+            {show.cloudcover_pct && (
+              <Line
+                type="monotone"
+                dataKey="cloudcover_pct"
+                yAxisId="right"
+                name="Cloud (%)"
+                dot={false}
+                strokeWidth={1.5}
+                stroke={COLORS.cloudcover_pct}
+                connectNulls
+              />
+            )}
+            {show.clarity_pct && (
+              <Line
+                type="monotone"
+                dataKey="clarity_pct"
+                yAxisId="right"
+                name="Sun (%)"
+                dot={false}
+                strokeWidth={1.5}
+                stroke={COLORS.clarity_pct}
+                connectNulls
+              />
+            )}
+            {show.humidity_pct && (
+              <Line
+                type="monotone"
+                dataKey="humidity_pct"
+                yAxisId="right"
+                name="Humidity (%)"
+                dot={false}
+                strokeWidth={1.5}
+                stroke={COLORS.humidity_pct}
+                connectNulls
+              />
+            )}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
     </div>
+  );
+}
+
+function Chip({ active, onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-1.5 rounded-full text-sm transition border ${
+        active
+          ? "bg-emerald-600 text-white border-emerald-600"
+          : "bg-white text-gray-700 border-gray-200 hover:border-gray-300"
+      }`}
+    >
+      {children}
+      {active && <span className="ml-1">✓</span>}
+    </button>
   );
 }
 
@@ -227,6 +287,29 @@ function Toggle({ label, on, onClick }) {
 }
 
 // ===== helpers =====
+
+function getYear(v) {
+  try {
+    const d = typeof v === "string" ? new Date(v) : v;
+    return d.getFullYear();
+  } catch {
+    return NaN;
+  }
+}
+
+const nf2 = new Intl.NumberFormat(undefined, {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
+});
+function fmtNDVI(v) {
+  if (v == null || Number.isNaN(v)) return "";
+  // NDVI in [0,1] — show 2 digits
+  return Number(v).toFixed(2).replace(/\.?0+$/,"");
+}
+function fmtNum2(v) {
+  if (v == null || Number.isNaN(v)) return "";
+  return nf2.format(v);
+}
 
 function round(x, p = 2) {
   const m = Math.pow(10, p);
