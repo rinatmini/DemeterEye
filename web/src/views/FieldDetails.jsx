@@ -23,6 +23,7 @@ export default function FieldDetails() {
     notes: "",
   });
   const [geometry, setGeometry] = useState(null);
+  const [yields, setYields] = useState(field?.yields ?? []);
   const [err, setErr] = useState("");
 
   const token = localStorage.getItem("token");
@@ -39,6 +40,7 @@ export default function FieldDetails() {
         notes: f?.meta?.notes || "",
       });
       setGeometry(f.geometry);
+      setYields(f.yields ?? []);
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -50,6 +52,25 @@ export default function FieldDetails() {
     load(); /* eslint-disable-next-line */
   }, [id]);
 
+  const upload = async () => {
+    try {
+      const f = await apiFetch(`/api/fields/${id}`, { token });
+      setField(f);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // repeat every 10 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      upload();
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [id]);
+
   const history = useMemo(() => field?.history ?? [], [field]);
 
   const saveMeta = async () => {
@@ -57,11 +78,8 @@ export default function FieldDetails() {
     try {
       const body = {
         name: meta.name,
-        geometry,
-        areaHa: field?.meta?.areaHa,
-        photo: meta.photo,
         notes: meta.notes,
-        crop: meta.crop,
+        yields,
       };
       const f = await apiFetch(`/api/fields/${id}`, {
         method: "PUT",
@@ -69,6 +87,7 @@ export default function FieldDetails() {
         body,
       });
       setField(f);
+      setYields(f.yields ?? []);
       setEditMeta(false);
     } catch (e) {
       setErr(e.message);
@@ -173,12 +192,15 @@ export default function FieldDetails() {
           {/* Map card */}
           <div className="rounded-2xl border bg-white p-4">
             {field.status === "processing" && (
-              <div className="-m-2 -mb-2">
+              <div className="relative w-full flex justify-center">
                 <img
                   src={fieldSvg}
                   alt="Processing"
-                  className="w-full h-full"
+                  className="mx-auto w-full max-w-[550px]"
                 />
+                <span className="absolute bottom-[10%] text-sm text-gray-500 text-center">
+                  The metrics are being calculated...
+                </span>
               </div>
             )}
             <div className="mb-2 flex items-center justify-between">
@@ -364,7 +386,7 @@ export default function FieldDetails() {
                 </div>
               </>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 <input
                   className="w-full rounded-xl border px-3 py-2"
                   placeholder="Name"
@@ -373,31 +395,117 @@ export default function FieldDetails() {
                     setMeta((m) => ({ ...m, name: e.target.value }))
                   }
                 />
-                <input
-                  className="w-full rounded-xl border px-3 py-2"
-                  placeholder="Crop"
-                  value={meta.crop}
-                  onChange={(e) =>
-                    setMeta((m) => ({ ...m, crop: e.target.value }))
-                  }
-                />
-                <input
-                  className="w-full rounded-xl border px-3 py-2"
-                  placeholder="Photo URL"
-                  value={meta.photo}
-                  onChange={(e) =>
-                    setMeta((m) => ({ ...m, photo: e.target.value }))
-                  }
-                />
-                <textarea
-                  className="w-full rounded-xl border px-3 py-2"
-                  placeholder="Notes"
-                  rows={4}
-                  value={meta.notes}
-                  onChange={(e) =>
-                    setMeta((m) => ({ ...m, notes: e.target.value }))
-                  }
-                />
+
+                <div>
+                  <textarea
+                    className="w-full rounded-xl border px-3 py-2"
+                    placeholder="Notes"
+                    rows={4}
+                    value={meta.notes}
+                    onChange={(e) =>
+                      setMeta((m) => ({ ...m, notes: e.target.value }))
+                    }
+                  />
+                </div>
+
+                <div>
+                  <div className="font-medium mb-1">Yield history</div>
+                  <table className="w-full text-sm">
+                    <thead className="text-gray-500">
+                      <tr>
+                        <th className="text-left py-1 w-24">Year</th>
+                        <th className="text-right py-1 w-28">Value</th>
+                        <th className="text-right py-1 w-24">Unit</th>
+                        <th className="py-1 w-16"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {yields.map((y, i) => (
+                        <tr key={i} className="border-t">
+                          <td className="py-1">
+                            <input
+                              type="number"
+                              className="w-full rounded border px-2 py-1 no-spinners"
+                              value={y.year ?? ""}
+                              onChange={(e) => {
+                                const v = Number(e.target.value);
+                                setYields((arr) =>
+                                  arr.map((it, idx) =>
+                                    idx === i ? { ...it, year: v } : it
+                                  )
+                                );
+                              }}
+                            />
+                          </td>
+                          <td className="py-1 text-right">
+                            <input
+                              type="number"
+                              step="0.01"
+                              className="w-full rounded border px-2 py-1 text-right no-spinners"
+                              value={y.valueTph ?? ""}
+                              onChange={(e) => {
+                                const v =
+                                  e.target.value === ""
+                                    ? null
+                                    : Number(e.target.value);
+                                setYields((arr) =>
+                                  arr.map((it, idx) =>
+                                    idx === i ? { ...it, valueTph: v } : it
+                                  )
+                                );
+                              }}
+                            />
+                          </td>
+                          <td className="py-1 text-right">
+                            <select
+                              className="col-span-3 rounded-xl border px-3 py-2"
+                              value={y.unit || "t/ha"}
+                              onChange={(e) =>
+                                setYields((arr) =>
+                                  arr.map((it, idx) =>
+                                    idx === i
+                                      ? { ...it, unit: e.target.value }
+                                      : it
+                                  )
+                                )
+                              }
+                            >
+                              <option value="t/ha">t/ha</option>
+                              <option value="lb/bu">lb/bu</option>
+                            </select>
+                          </td>
+                          <td className="py-1 text-right">
+                            <button
+                              className="text-sm text-rose-600"
+                              onClick={() =>
+                                setYields((arr) =>
+                                  arr.filter((_, idx) => idx !== i)
+                                )
+                              }
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  <div className="pt-2">
+                    <button
+                      className="text-sm px-3 py-1 rounded-xl border"
+                      onClick={() => {
+                        const prevYear = yields[yields.length - 1].year - 1;
+                        setYields((p) => [
+                          ...p,
+                          { year: prevYear, valueTph: "", unit: "t/ha" },
+                        ]);
+                      }}
+                    >
+                      + Add row
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
             {err && <div className="text-sm text-rose-600">{err}</div>}
