@@ -334,13 +334,13 @@ export default function FieldDetails() {
 
             {!editMeta ? (
               <>
-                {field.photo && (
+                {/* {field.photo && (
                   <img
                     src={field.photo}
                     alt=""
                     className="w-full rounded-xl object-cover max-h-48"
                   />
-                )}
+                )} */}
                 <dl className="text-sm">
                   <div className="flex justify-between py-1">
                     <dt>Name</dt>
