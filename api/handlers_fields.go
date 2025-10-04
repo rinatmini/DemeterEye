@@ -168,8 +168,8 @@ func (a *App) handleCreateField(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(req.Name) == "" || len(req.Geometry) == 0 {
-		http.Error(w, "name and geometry are required", http.StatusBadRequest)
+	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Crop) == "" || len(req.Geometry) == 0 {
+		http.Error(w, "name, crop and geometry are required", http.StatusBadRequest)
 		return
 	}
 
