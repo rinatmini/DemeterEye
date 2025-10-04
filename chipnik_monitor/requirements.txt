@@ -12,3 +12,11 @@ fastapi
 uvicorn
 pymongo
 python-dotenv
+
+# Prophet model dependencies
+prophet
+scikit-learn
+matplotlib
+seaborn
+jupyter
+ipykernel
