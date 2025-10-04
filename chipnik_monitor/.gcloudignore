@@ -8,3 +8,6 @@ __pycache__/
 # Ignore IDE configs
 .vscode/
 .idea/
+
+on-premise/
+media/

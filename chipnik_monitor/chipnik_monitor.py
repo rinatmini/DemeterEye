@@ -1,4 +1,4 @@
-from enum import Enum
+﻿from enum import Enum
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -17,6 +17,7 @@ from shapely.geometry import shape, box, mapping
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 from pathlib import Path
+from collections import OrderedDict
 from functools import partial
 import requests
 import hashlib
@@ -38,11 +39,10 @@ if not logger.handlers:
     logger.addHandler(handler)
 
 _CLOUD_RUN_SERVICE = os.getenv('K_SERVICE') or os.getenv('GOOGLE_CLOUD_PROJECT')
-logger.setLevel(logging.ERROR if _CLOUD_RUN_SERVICE else logging.DEBUG)
+logger.setLevel(logging.INFO if _CLOUD_RUN_SERVICE else logging.DEBUG)
 
 def log_progress(message: str) -> None:
-    level = logging.ERROR if _CLOUD_RUN_SERVICE else logging.INFO
-    logger.log(level, message)
+    logger.log(logging.INFO, message)
 
 DEFAULT_CENTER_LON = -122.09261814845487
 DEFAULT_CENTER_LAT = 47.60464601773639
@@ -129,7 +129,16 @@ def list_geojson_files(directory: Path) -> List[Path]:
         unique[file_path.name] = file_path
     return sorted(unique.values(), key=lambda f: f.name.lower())
 
-CACHE_ROOT = Path(".cache")
+def _determine_cache_root() -> Path:
+    override = os.getenv("CACHE_ROOT")
+    if override:
+        return Path(override)
+    if _CLOUD_RUN_SERVICE:
+        return Path("/tmp/chipnik_cache")
+    return Path(".cache")
+
+CACHE_ROOT = _determine_cache_root()
+CACHE_ROOT.mkdir(parents=True, exist_ok=True)
 INDEX_CACHE_VERSION = "1"
 
 # HLS products have 30 m ground sampling distance; used to convert pixels to area.
@@ -198,6 +207,9 @@ STAC_CACHE_VERSION = "1"
 
 STAC_PAGE_SIZE = 200
 STAC_MAX_ITEMS = 2000
+_STAC_MEMORY_CACHE_MAX_ENTRIES = 32
+_STAC_RESULTS_CACHE: "OrderedDict[Tuple[Any, ...], Tuple[Dict[str, Any], ...]]" = OrderedDict()
+
 
 STAC_CACHE_TTL_SECONDS = 3600 * 24 * 7
 
@@ -625,6 +637,151 @@ def build_yearly_crop_rankings(ndvi_df: pd.DataFrame, crop_df: pd.DataFrame) -> 
     return summary
 
 
+
+
+def _stac_token_fingerprint(token: str) -> str:
+    if not token:
+        return "anon"
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _make_stac_memory_cache_key(
+    bbox: Tuple[float, float, float, float],
+    start: str,
+    end: str,
+    max_cc: int,
+    dataset_type: str,
+    token: str,
+) -> Tuple[Any, ...]:
+    rounded_bbox = tuple(round(float(coord), 6) for coord in bbox)
+    return (rounded_bbox, start, end, int(max_cc), dataset_type, _stac_token_fingerprint(token))
+
+
+def _get_stac_records_from_memory(cache_key: Tuple[Any, ...]) -> Optional[List[Dict[str, Any]]]:
+    cached = _STAC_RESULTS_CACHE.get(cache_key)
+    if cached is None:
+        return None
+    _STAC_RESULTS_CACHE.move_to_end(cache_key)
+    return [dict(record) for record in cached]
+
+
+def _set_stac_records_in_memory(cache_key: Tuple[Any, ...], records: List[Dict[str, Any]]) -> None:
+    _STAC_RESULTS_CACHE[cache_key] = tuple(dict(record) for record in records)
+    _STAC_RESULTS_CACHE.move_to_end(cache_key)
+    if len(_STAC_RESULTS_CACHE) > _STAC_MEMORY_CACHE_MAX_ENTRIES:
+        _STAC_RESULTS_CACHE.popitem(last=False)
+
+
+def _fetch_stac_records(
+    bbox: Tuple[float, float, float, float],
+    start: str,
+    end: str,
+    max_cc: int,
+    dataset_type: str,
+    token: str,
+) -> List[Dict[str, Any]]:
+    cache_key = _make_stac_memory_cache_key(bbox, start, end, max_cc, dataset_type, token)
+    cached_records = _get_stac_records_from_memory(cache_key)
+    if cached_records is not None:
+        logger.debug(
+            "STAC in-memory cache hit: bbox=%s start=%s end=%s dataset=%s",
+            bbox,
+            start,
+            end,
+            dataset_type,
+        )
+        return cached_records
+
+    logger.debug(
+        "STAC in-memory cache miss: bbox=%s start=%s end=%s dataset=%s",
+        bbox,
+        start,
+        end,
+        dataset_type,
+    )
+
+    catalog = Client.open(
+        "https://cmr.earthdata.nasa.gov/stac/LPCLOUD",
+        headers={"Authorization": f"Bearer {token}"} if token else {},
+    )
+
+    if dataset_type == "HLSS30.v2.0":
+        collections = ["HLSS30.v2.0"]
+    elif dataset_type == "HLSL30.v2.0":
+        collections = ["HLSL30.v2.0"]
+    else:
+        collections = ["HLSS30.v2.0", "HLSL30.v2.0"]
+
+    logger.debug("Collections to query: %s", collections)
+
+    records: List[Dict[str, Any]] = []
+    normalised_bbox = list(bbox)
+
+    for collection in collections:
+        search = catalog.search(
+            collections=[collection],
+            bbox=normalised_bbox,
+            datetime=f"{start}/{end}",
+            max_items=STAC_MAX_ITEMS,
+            limit=STAC_PAGE_SIZE,
+        )
+        collected: List[Any] = []
+        for item in search.items():
+            collected.append(item)
+            if len(collected) >= STAC_MAX_ITEMS:
+                logger.warning(
+                    "Reached STAC max items (%s) for %s; results truncated",
+                    STAC_MAX_ITEMS,
+                    collection,
+                )
+                break
+        logger.debug("Collection %s returned %s items before filtering", collection, len(collected))
+
+        for item in collected:
+            props = item.properties
+            cloud_cover = props.get("eo:cloud_cover", 100)
+            if cloud_cover > max_cc:
+                logger.debug(
+                    "Skipping item %s: cloud cover %.2f exceeds threshold %s",
+                    item.id,
+                    cloud_cover,
+                    max_cc,
+                )
+                continue
+
+            nir_asset = item.assets.get("B8A") or item.assets.get("B05")
+            red_asset = item.assets.get("B04")
+            blue_asset = item.assets.get("B02")
+
+            nir_url = getattr(nir_asset, "href", None)
+            red_url = getattr(red_asset, "href", None)
+            blue_url = getattr(blue_asset, "href", None)
+            if not nir_url or not red_url or not blue_url:
+                logger.debug(
+                    "Skipping item %s: missing required bands (red=%s, nir=%s, blue=%s)",
+                    item.id,
+                    bool(red_url),
+                    bool(nir_url),
+                    bool(blue_url),
+                )
+                continue
+
+            records.append(
+                {
+                    "id": item.id,
+                    "datetime": pd.to_datetime(props["datetime"]),
+                    "cloud_cover": float(cloud_cover),
+                    "collection": item.collection_id,
+                    "nir_url": nir_url,
+                    "red_url": red_url,
+                    "blue_url": blue_url,
+                }
+            )
+            logger.debug("Kept item %s (collection=%s)", item.id, item.collection_id)
+
+    _set_stac_records_in_memory(cache_key, records)
+    return records
+
 @st.cache_data(ttl=3600 * 24 * 7)
 def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
                     dataset_type: str, _token: str) -> pd.DataFrame:
@@ -640,85 +797,19 @@ def search_hls_data(bbox: List[float], start: str, end: str, max_cc: int,
         return cached_df
 
     try:
-        # Connect to LP DAAC STAC
-        catalog = Client.open(
-            "https://cmr.earthdata.nasa.gov/stac/LPCLOUD",
-            headers={"Authorization": f"Bearer {_token}"} if _token else {}
-        )
-
-        # Determine which collections to query
-        if dataset_type == "HLSS30.v2.0":
-            collections = ["HLSS30.v2.0"]
-        elif dataset_type == "HLSL30.v2.0":
-            collections = ["HLSL30.v2.0"]
-        else:
-            collections = ["HLSS30.v2.0", "HLSL30.v2.0"]
-
-        logger.debug("Collections to query: %s", collections)
-        all_items = []
-        for collection in collections:
-            search = catalog.search(
-                collections=[collection],
-                bbox=bbox,
-                datetime=f"{start}/{end}",
-                max_items=STAC_MAX_ITEMS,
-                limit=STAC_PAGE_SIZE
-            )
-            collected = []
-            for item in search.items():
-                collected.append(item)
-                if len(collected) >= STAC_MAX_ITEMS:
-                    logger.warning("Reached STAC max items (%s) for %s; results truncated", STAC_MAX_ITEMS, collection)
-                    break
-            logger.debug("Collection %s returned %s items before filtering", collection, len(collected))
-            all_items.extend(collected)
-
-        # Convert results into a DataFrame
-        records = []
-        for item in all_items:
-            props = item.properties
-            logger.debug("Evaluating item %s (cloud %.2f)", item.id, props.get('eo:cloud_cover', float('nan')))
-
-            # Cloud cover filter
-            cloud_cover = props.get('eo:cloud_cover', 100)
-            if cloud_cover > max_cc:
-                logger.debug("Skipping item %s: cloud cover %.2f exceeds threshold %s", item.id, cloud_cover, max_cc)
-                continue
-
-            nir_asset = item.assets.get('B8A') or item.assets.get('B05')
-            red_asset = item.assets.get('B04')
-            blue_asset = item.assets.get('B02')
-
-            nir_url = getattr(nir_asset, 'href', None)
-            red_url = getattr(red_asset, 'href', None)
-            blue_url = getattr(blue_asset, 'href', None)
-            if not nir_url or not red_url or not blue_url:
-                logger.debug("Skipping item %s: missing required bands (red=%s, nir=%s, blue=%s)", item.id, bool(red_url), bool(nir_url), bool(blue_url))
-                continue
-
-            records.append({
-                "id": item.id,
-                "datetime": pd.to_datetime(props['datetime']),
-                "cloud_cover": float(cloud_cover),
-                "collection": item.collection_id,
-                "nir_url": nir_url,
-                "red_url": red_url,
-                "blue_url": blue_url
-            })
-            logger.debug("Kept item %s (collection=%s)", item.id, item.collection_id)
-
-        df = pd.DataFrame(records)
-        logger.info("search_hls_data: %s items after filtering", len(df))
-        if not df.empty:
-            df = df.sort_values("datetime")
-        store_stac_cache(cache_path, records)
-        logger.debug("search_hls_data: cached %s items at %s", len(df), cache_path.name)
-        return df
-
+        records = _fetch_stac_records(tuple(bbox), start, end, max_cc, dataset_type, _token)
     except Exception as e:
         logger.exception("search_hls_data failed")
         st.error(f"Search error: {e}")
         return pd.DataFrame()
+
+    df = pd.DataFrame(records)
+    logger.info("search_hls_data: %s items after filtering", len(df))
+    if not df.empty:
+        df = df.sort_values("datetime")
+    store_stac_cache(cache_path, records)
+    logger.debug("search_hls_data: cached %s items at %s", len(df), cache_path.name)
+    return df
 
 
 def summarise_ndvi_stats(ndvi: Optional[np.ma.MaskedArray], mean_ndvi: float) -> Dict[str, float]:
@@ -1129,7 +1220,19 @@ if search_button:
                 
                 if row_tuples:
                     worker = partial(compute_index_for_row, index_types=index_types, bbox=bbox, token=earthdata_token)
-                    max_workers = min(8, len(row_tuples))
+                    default_worker_cap = 1 if _CLOUD_RUN_SERVICE else 8
+                    worker_cap_raw = os.getenv("WORKER_CAP", "").strip()
+                    if worker_cap_raw:
+                        try:
+                            worker_cap = max(1, int(worker_cap_raw))
+                        except ValueError:
+                            logger.warning("Invalid WORKER_CAP=%s; falling back to default", worker_cap_raw)
+                            worker_cap = default_worker_cap
+                    else:
+                        worker_cap = default_worker_cap
+                    max_workers = min(worker_cap, len(row_tuples))
+                    max_workers = max(1, max_workers)
+                    logger.debug("NDVI worker pool size=%s", max_workers)
                     try:
                         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                             future_to_index = {executor.submit(worker, row): idx for idx, row in enumerate(row_tuples)}
@@ -1152,8 +1255,8 @@ if search_button:
                                     message += f" ({scene_id})"
                                 message += f": {date_label}"
                                 status_text.text(message)
-                                log_progress(message)
                                 progress_bar.progress(completed / len(row_tuples))
+                                log_progress(message)
                     except Exception:
                         logger.exception("Parallel NDVI processing failed; falling back to sequential execution")
                         results = []
@@ -1171,11 +1274,11 @@ if search_button:
                                 message += f" ({scene_id})"
                             message += f": {date_label}"
                             status_text.text(message)
-                            log_progress(message)
                             result = worker(row)
                             if result:
                                 results.append(result)
                             progress_bar.progress((idx + 1) / len(row_tuples))
+                            log_progress(message)
 
                 status_text.empty()
                 progress_bar.empty()
