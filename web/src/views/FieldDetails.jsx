@@ -5,7 +5,7 @@ import { Loader2, Map as MapIcon, Pencil, Save, X, Leaf } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import StatusPill from "../components/StatusPill.jsx";
 import MetricsChart from "../components/MetricsChart.jsx";
-import FieldDrawMap from "../components/FieldDrawMap.jsx";    
+import FieldDrawMap from "../components/FieldDrawMap.jsx";
 import fieldSvg from "../assets/field.svg";
 
 export default function FieldDetails() {
@@ -22,15 +22,9 @@ export default function FieldDetails() {
     photo: "",
     notes: "",
   });
-  const CROP_OPTIONS = [
-    "Potato",
-    "Soybean",
-    "Sugar Beet",
-    "Tomato",
-    "Wheat",
-  ];
+  const CROP_OPTIONS = ["Potato", "Soybean", "Sugar Beet", "Tomato", "Wheat"];
   const [geometry, setGeometry] = useState(null);
-  const [yields, setYields] = useState(field?.yields ?? []);
+  const [yields, setYields] = useState([]);
   const [err, setErr] = useState("");
 
   const token = localStorage.getItem("token");
@@ -56,7 +50,7 @@ export default function FieldDetails() {
   };
 
   useEffect(() => {
-    load(); /* eslint-disable-next-line */
+    load(); // eslint-disable-next-line
   }, [id]);
 
   const upload = async () => {
@@ -72,9 +66,7 @@ export default function FieldDetails() {
 
   // repeat every 10 seconds
   useEffect(() => {
-    const interval = setInterval(() => {
-      upload();
-    }, 10000);
+    const interval = setInterval(() => upload(), 10000);
     return () => clearInterval(interval);
   }, [id]);
 
@@ -101,7 +93,6 @@ export default function FieldDetails() {
         yields,
         geometry,
       };
-
       const f = await apiFetch(`/api/fields/${id}`, {
         method: "PUT",
         token,
@@ -126,14 +117,12 @@ export default function FieldDetails() {
 
   function centerFromGeometry(geo) {
     const fallback = [47.6062, -122.3321];
-
     if (!geo) return fallback;
 
     if (geo.type === "Point") {
       const [lon, lat] = geo.coordinates;
       return [lat, lon];
     }
-
     if (geo.type === "Polygon") {
       const ring = geo.coordinates?.[0];
       if (!ring?.length) return fallback;
@@ -145,7 +134,6 @@ export default function FieldDetails() {
       }
       return [sy / ring.length, sx / ring.length];
     }
-
     if (geo.type === "MultiPolygon") {
       const ring = geo.coordinates?.[0]?.[0];
       if (!ring?.length) return fallback;
@@ -157,7 +145,6 @@ export default function FieldDetails() {
       }
       return [sy / ring.length, sx / ring.length];
     }
-
     return fallback;
   }
 
@@ -179,89 +166,92 @@ export default function FieldDetails() {
         ← Back to list
       </button>
 
+      {/* Header card (stays full-width) */}
+      <div className="rounded-2xl border bg-white p-4">
+        <div className="flex items-center justify-between">
+          <div className="font-semibold">{field.name}</div>
+          <StatusPill status={field.status} />
+        </div>
+        <div className="mt-1 text-sm text-gray-600 flex items-center gap-3">
+          <Leaf className="h-4 w-4 text-emerald-600" />
+          <span>{field?.meta?.crop || "—"}</span>
+          <span className="text-gray-300">•</span>
+          <span title="Area">{field?.meta?.areaHa ?? "—"} ha</span>
+        </div>
+      </div>
+
+      {/* FULL-WIDTH METRICS */}
+      <div className="rounded-2xl border bg-white p-4 pb-8">
+        <div className="mb-2 flex items-center gap-2">
+          <span className="font-semibold">Metrics</span>
+        </div>
+        {field.status === "processing" ? (
+          // Show SVG animation while metrics are being computed
+          <div
+            className="relative w-full min-h-[320px] flex flex-col items-center justify-center"
+            aria-live="polite"
+          >
+            <img
+              src={fieldSvg}
+              alt="Processing metrics animation"
+              className="mx-auto w-full max-w-[700px] select-none pointer-events-none"
+            />
+            <span className="mt-2 text-sm text-gray-500">
+              The metrics are being calculated...
+            </span>
+          </div>
+        ) : (
+          // Ready -> show the chart
+          <MetricsChart history={history} />
+        )}
+      </div>
+
+      {/* BELOW: GRID with Map (left) and Sidebar (right) */}
       <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
-        {/* LEFT: Chart + Map */}
-        <div className="space-y-4">
-          {/* Header card */}
-          <div className="rounded-2xl border bg-white p-4">
-            <div className="flex items-center justify-between">
-              <div className="font-semibold">{field.name}</div>
-              <StatusPill status={field.status} />
-            </div>
-            <div className="mt-1 text-sm text-gray-600 flex items-center gap-3">
-              <Leaf className="h-4 w-4 text-emerald-600" />
-              <span>{field?.meta?.crop || "—"}</span>
-              <span className="text-gray-300">•</span>
-              <span title="Area">{field?.meta?.areaHa ?? "—"} ha</span>
-            </div>
-          </div>
-
-          {/* Chart card */}
-          {field.status === "ready" && (
-            <div className="rounded-2xl border bg-white p-4 pb-8">
-              <div className="mb-2 flex items-center gap-2">
-                <span className="font-semibold">Metrics</span>
-              </div>
-              <MetricsChart history={history} />
-            </div>
-          )}
-
-          {/* Map card */}
-          <div className="rounded-2xl border bg-white p-4">
-            {field.status === "processing" && (
-              <div className="relative w-full flex justify-center">
-                <img
-                  src={fieldSvg}
-                  alt="Processing"
-                  className="mx-auto w-full max-w-[550px]"
-                />
-                <span className="absolute bottom-[10%] text-sm text-gray-500 text-center">
-                  The metrics are being calculated...
-                </span>
-              </div>
-            )}
-            <div className="mb-2 flex items-center justify-between">
-              <span className="font-semibold flex items-center gap-2">
-                <MapIcon className="h-4 w-4" /> Field geometry
-              </span>
-              {!editGeom ? (
+        {/* LEFT: Map card */}
+        <div className="rounded-2xl border bg-white p-4 self-start">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="font-semibold flex items-center gap-2">
+              <MapIcon className="h-4 w-4" /> Field geometry
+            </span>
+            {!editGeom ? (
+              <button
+                className="text-sm text-emerald-600 hover:underline"
+                onClick={() => setEditGeom(true)}
+              >
+                Edit geometry
+              </button>
+            ) : (
+              <div className="flex gap-2">
                 <button
-                  className="text-sm text-emerald-600 hover:underline"
-                  onClick={() => setEditGeom(true)}
+                  className="text-sm px-3 py-1 rounded-xl border"
+                  onClick={() => {
+                    setGeometry(field.geometry);
+                    setEditGeom(false);
+                  }}
                 >
-                  Edit geometry
+                  <X className="inline h-3 w-3 mr-1" /> Cancel
                 </button>
-              ) : (
-                <div className="flex gap-2">
-                  <button
-                    className="text-sm px-3 py-1 rounded-xl border"
-                    onClick={() => {
-                      setGeometry(field.geometry);
-                      setEditGeom(false);
-                    }}
-                  >
-                    <X className="inline h-3 w-3 mr-1" /> Cancel
-                  </button>
-                  <button
-                    className="text-sm px-3 py-1 rounded-xl bg-emerald-600 text-white"
-                    onClick={saveGeometry}
-                  >
-                    <Save className="inline h-3 w-3 mr-1" /> Save
-                  </button>
-                </div>
-              )}
-            </div>
-            {geometry?.coordinates?.[0] && (
-              <FieldDrawMap
-                value={geometry}
-                onChange={setGeometry}
-                mode={editGeom ? "edit" : "view"}
-                initialCenter={centerFromGeometry(geometry)}
-                initialZoom={14}
-                className="w-full h-[380px] rounded-xl border"
-              />
+                <button
+                  className="text-sm px-3 py-1 rounded-xl bg-emerald-600 text-white"
+                  onClick={saveGeometry}
+                >
+                  <Save className="inline h-3 w-3 mr-1" /> Save
+                </button>
+              </div>
             )}
           </div>
+
+          {geometry?.coordinates?.[0] && (
+            <FieldDrawMap
+              value={geometry}
+              onChange={setGeometry}
+              mode={editGeom ? "edit" : "view"}
+              initialCenter={centerFromGeometry(geometry)}
+              initialZoom={14}
+              className="w-full h-[380px] rounded-xl border"
+            />
+          )}
         </div>
 
         {/* RIGHT: Forecast + About */}
@@ -285,7 +275,7 @@ export default function FieldDetails() {
                 </div>
                 <div className="flex justify-between py-1">
                   <dt>Peak at</dt>
-                  <dd>{field.forecast.ndviPeakAt?.slice(0, 10) ?? "—"}</dd>
+                  <dd>{field.forecast.ndviPeakAt?.slice?.(0, 10) ?? "—"}</dd>
                 </div>
                 <div className="flex justify-between py-1">
                   <dt>Confidence</dt>
@@ -412,7 +402,6 @@ export default function FieldDetails() {
                     setMeta((m) => ({ ...m, name: e.target.value }))
                   }
                 />
-
                 <select
                   className="w-full rounded-xl border px-3 py-2 bg-white"
                   value={meta.crop}
@@ -427,7 +416,6 @@ export default function FieldDetails() {
                     </option>
                   ))}
                 </select>
-
                 <div>
                   <textarea
                     className="w-full rounded-xl border px-3 py-2"
@@ -440,6 +428,7 @@ export default function FieldDetails() {
                   />
                 </div>
 
+                {/* Editable yield table */}
                 <div>
                   <div className="font-medium mb-1">Yield history</div>
                   <table className="w-full text-sm">
