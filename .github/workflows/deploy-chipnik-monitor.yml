@@ -7,12 +7,23 @@ on:
     paths:
       - "chipnik_monitor/**"
   workflow_dispatch:
+    inputs:
+      DAYS_BACK_LIMIT:
+        description: "Lookback window in days"
+        required: false
+        default: "100"
   workflow_call:
+    inputs:
+      DAYS_BACK_LIMIT:
+        required: false
+        type: string
+        default: "100"
 
 env:
   PROJECT_ID: demetereye
   REGION: us-central1
   SERVICE_NAME: demetereye-monitor
+  DAYS_BACK_LIMIT: "100"
 
 jobs:
   deploy:
@@ -40,6 +51,7 @@ jobs:
           EARTHDATA_BEARER_TOKEN: ${{ secrets.EARTHDATA_BEARER_TOKEN }}
           MONGO_URI: ${{ secrets.MONGO_URI }}
           MONGO_DB: ${{ secrets.MONGO_DB }}
+          DAYS_BACK_LIMIT: ${{ inputs.DAYS_BACK_LIMIT || github.event.inputs.DAYS_BACK_LIMIT || env.DAYS_BACK_LIMIT }}
         working-directory: chipnik_monitor
         run: |
           gcloud run deploy "$SERVICE_NAME" \
@@ -49,4 +61,4 @@ jobs:
             --min-instances 0 --max-instances 2 \
             --memory 512Mi --cpu 1 \
             --no-cpu-throttling \
-            --set-env-vars EARTHDATA_BEARER_TOKEN=${EARTHDATA_BEARER_TOKEN},MONGO_URI=${MONGO_URI},MONGO_DB=${MONGO_DB}
+            --set-env-vars EARTHDATA_BEARER_TOKEN=${EARTHDATA_BEARER_TOKEN},MONGO_URI=${MONGO_URI},MONGO_DB=${MONGO_DB},DAYS_BACK_LIMIT=${DAYS_BACK_LIMIT}
