@@ -65,7 +65,7 @@ if _days_back_raw:
         DAYS_BACK_LIMIT = DEFAULT_DAYS_BACK_LIMIT
 else:
     DAYS_BACK_LIMIT = DEFAULT_DAYS_BACK_LIMIT
-DAYS_BACK_LIMIT = max(100, min(4500, DAYS_BACK_LIMIT))
+DAYS_BACK_LIMIT = max(1, min(4500, DAYS_BACK_LIMIT))
 
 APP_NAME = "HLS Crop Monitor"
 APP_LOGO_PATH = Path("media") / "small_logo.png"
@@ -469,12 +469,19 @@ with st.sidebar:
         max_value=datetime.now()
     )
 
+    max_days_back = DAYS_BACK_LIMIT
+    slider_step = 1 if max_days_back <= 30 else 30
+    slider_min = min(100, max_days_back - slider_step)
+    if slider_min < 0:
+        slider_min = 0
+    if slider_min >= max_days_back:
+        slider_min = max(0, max_days_back - slider_step)
     days_back = st.slider(
         "Days back",
-        min_value=100,
-        max_value=DAYS_BACK_LIMIT,
-        value=DAYS_BACK_LIMIT,
-        step=30
+        min_value=slider_min,
+        max_value=max_days_back,
+        value=max_days_back,
+        step=slider_step
     )
 
     start_date = end_date - timedelta(days=days_back)
