@@ -16,6 +16,11 @@ RUN apt-get update \
     build-essential \
     libicu70 \
     libssl3 \
+    lsb-release \
+    gdal-bin \
+    libgdal-dev \
+    proj-bin \
+    libproj-dev \
   && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://www.noip.com/download/linux/latest -o /tmp/noip-duc.tar.gz \
@@ -47,3 +52,4 @@ RUN chmod +x /entrypoint.sh \
 USER runner
 
 ENTRYPOINT ["/entrypoint.sh"]
+
