@@ -5,7 +5,7 @@ import { Loader2, Map as MapIcon, Pencil, Save, X, Leaf } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import StatusPill from "../components/StatusPill.jsx";
 import MetricsChart from "../components/MetricsChart.jsx";
-import FieldDrawMap from "../components/FieldDrawMap.jsx";
+import FieldDrawMap from "../components/FieldDrawMap.jsx";    
 import fieldSvg from "../assets/field.svg";
 
 export default function FieldDetails() {
@@ -22,6 +22,13 @@ export default function FieldDetails() {
     photo: "",
     notes: "",
   });
+  const CROP_OPTIONS = [
+    "Potato",
+    "Soybean",
+    "Sugar Beet",
+    "Tomato",
+    "Wheat",
+  ];
   const [geometry, setGeometry] = useState(null);
   const [yields, setYields] = useState(field?.yields ?? []);
   const [err, setErr] = useState("");
@@ -75,35 +82,33 @@ export default function FieldDetails() {
 
   const saveMeta = async () => {
     setErr("");
+    setEditMeta(false);
+    saveField();
+  };
+
+  const saveGeometry = async () => {
+    setErr("");
+    setEditGeom(false);
+    saveField();
+  };
+
+  const saveField = async () => {
     try {
       const body = {
         name: meta.name,
         notes: meta.notes,
+        crop: meta.crop,
         yields,
+        geometry,
       };
+
       const f = await apiFetch(`/api/fields/${id}`, {
         method: "PUT",
         token,
         body,
       });
       setField(f);
-      setYields(f.yields ?? []);
       setEditMeta(false);
-    } catch (e) {
-      setErr(e.message);
-    }
-  };
-
-  const saveGeometry = async () => {
-    setErr("");
-    try {
-      const f = await apiFetch(`/api/fields/${id}`, {
-        method: "PUT",
-        token,
-        body: { geometry },
-      });
-      setField(f);
-      setEditGeom(false);
     } catch (e) {
       setErr(e.message);
     }
@@ -155,6 +160,18 @@ export default function FieldDetails() {
 
     return fallback;
   }
+
+  const addYieldRow = () => {
+    if (yields.length === 0) {
+      setYields((p) => [
+        ...p,
+        { year: new Date().getFullYear(), valueTph: "", unit: "t/ha" },
+      ]);
+      return;
+    }
+    const prevYear = yields[yields.length - 1].year - 1;
+    setYields((p) => [...p, { year: prevYear, valueTph: "", unit: "t/ha" }]);
+  };
 
   return (
     <div className="p-6 space-y-4">
@@ -396,6 +413,21 @@ export default function FieldDetails() {
                   }
                 />
 
+                <select
+                  className="w-full rounded-xl border px-3 py-2 bg-white"
+                  value={meta.crop}
+                  onChange={(e) =>
+                    setMeta((m) => ({ ...m, crop: e.target.value }))
+                  }
+                >
+                  <option value="">Select crop…</option>
+                  {CROP_OPTIONS.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+
                 <div>
                   <textarea
                     className="w-full rounded-xl border px-3 py-2"
@@ -494,13 +526,7 @@ export default function FieldDetails() {
                   <div className="pt-2">
                     <button
                       className="text-sm px-3 py-1 rounded-xl border"
-                      onClick={() => {
-                        const prevYear = yields[yields.length - 1].year - 1;
-                        setYields((p) => [
-                          ...p,
-                          { year: prevYear, valueTph: "", unit: "t/ha" },
-                        ]);
-                      }}
+                      onClick={addYieldRow}
                     >
                       + Add row
                     </button>

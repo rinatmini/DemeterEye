@@ -21,6 +21,13 @@ export default function CreateField() {
   const [overrideArea, setOverrideArea] = useState(false);
   const [photo, setPhoto] = useState("");
   const [crop, setCrop] = useState("");
+  const CROP_OPTIONS = [
+    "Potato",
+    "Soybean",
+    "Sugar Beet",
+    "Tomato",
+    "Wheat",
+  ];
   const [notes, setNotes] = useState("");
   const [geometry, setGeometry] = useState(null);
   const [yields, setYields] = useState([
@@ -196,12 +203,18 @@ export default function CreateField() {
             </label>
           </div>
 
-          <input
-            className="rounded-xl border px-3 py-2"
-            placeholder="Crop"
+          <select
+            className="rounded-xl border px-3 py-2 bg-white"
             value={crop}
             onChange={(e) => setCrop(e.target.value)}
-          />
+          >
+            <option value="">Select crop…</option>
+            {CROP_OPTIONS.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
 
           <input
             className="w-full rounded-xl border px-3 py-2"
