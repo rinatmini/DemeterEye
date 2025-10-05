@@ -4,5 +4,7 @@ __pycache__/*
 */venv/
 */__pycache__
 chipnik_monitor/on-premise/build.sh
-chipnik_monitor/models
+!chipnik_monitor/models
+chipnik_monitor/models/*
+!chipnik_monitor/models/ndvi_prophet_model.pkl
 .vs

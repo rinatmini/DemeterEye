@@ -258,50 +258,50 @@ def _prepare_ml_features(history_data: List[Dict[str, Any]], weather_df: pd.Data
                'is_northern_region', 'is_growing_season']]
 
 
-def _calculate_flowering_start_date_ml(forecast_data: pd.DataFrame, method: str = 'ndvi_threshold') -> Dict[str, Any]:
+def _calculate_blooming_start_date_ml(forecast_data: pd.DataFrame, method: str = 'ndvi_threshold') -> Dict[str, Any]:
     """
-    Calculate flowering start date based on ML NDVI predictions
+    Calculate blooming start date based on ML NDVI predictions
     
     Parameters:
     forecast_data (pd.DataFrame): Prophet forecast with 'ds' and 'yhat' columns
-    method (str): Method for calculating flowering start
+    method (str): Method for calculating blooming start
     
     Returns:
-    dict: Flowering prediction results
+    dict: Blooming prediction results
     """
     if forecast_data is None or len(forecast_data) == 0:
-        return {'flowering_start_date': None, 'method': method, 'confidence': 0}
+        return {'blooming_start_date': None, 'method': method, 'confidence': 0}
     
     # Create a copy and ensure proper date handling
     df = forecast_data.copy()
     df['ds'] = pd.to_datetime(df['ds'])
     df = df.sort_values('ds')
     
-    flowering_results = {}
+    blooming_results = {}
     
     if method == 'ndvi_threshold':
-        # Method 1: Flowering starts when NDVI reaches 0.6-0.7
-        flowering_threshold = 0.65
+        # Method 1: Blooming starts when NDVI reaches 0.6-0.7
+        blooming_threshold = 0.65
         
         # Find first date when NDVI exceeds threshold (during spring growth)
         spring_mask = (df['ds'].dt.month >= 3) & (df['ds'].dt.month <= 6)
         spring_data = df[spring_mask]
         
         if len(spring_data) > 0:
-            flowering_candidates = spring_data[spring_data['yhat'] >= flowering_threshold]
-            if len(flowering_candidates) > 0:
-                flowering_date = flowering_candidates['ds'].iloc[0]
-                confidence = min(0.9, 0.5 + (flowering_candidates['yhat'].iloc[0] - flowering_threshold) * 2)
-                flowering_results = {
-                    'flowering_start_date': flowering_date,
+            blooming_candidates = spring_data[spring_data['yhat'] >= blooming_threshold]
+            if len(blooming_candidates) > 0:
+                blooming_date = blooming_candidates['ds'].iloc[0]
+                confidence = min(0.9, 0.5 + (blooming_candidates['yhat'].iloc[0] - blooming_threshold) * 2)
+                blooming_results = {
+                    'blooming_start_date': blooming_date,
                     'method': 'NDVI Threshold (≥0.65)',
                     'confidence': confidence,
-                    'ndvi_at_flowering': flowering_candidates['yhat'].iloc[0],
-                    'threshold_used': flowering_threshold
+                    'ndvi_at_blooming': blooming_candidates['yhat'].iloc[0],
+                    'threshold_used': blooming_threshold
                 }
     
     elif method == 'ndvi_acceleration':
-        # Method 2: Flowering starts when NDVI growth rate accelerates
+        # Method 2: Blooming starts when NDVI growth rate accelerates
         if len(df) >= 3:
             df['ndvi_growth'] = df['yhat'].diff()
             df['ndvi_acceleration'] = df['ndvi_growth'].diff()
@@ -312,31 +312,31 @@ def _calculate_flowering_start_date_ml(forecast_data: pd.DataFrame, method: str 
             if len(spring_data) > 0:
                 max_accel_idx = spring_data['ndvi_acceleration'].idxmax()
                 if not pd.isna(max_accel_idx):
-                    flowering_date = df.loc[max_accel_idx, 'ds']
+                    blooming_date = df.loc[max_accel_idx, 'ds']
                     confidence = min(0.85, 0.6 + abs(df.loc[max_accel_idx, 'ndvi_acceleration']) * 10)
-                    flowering_results = {
-                        'flowering_start_date': flowering_date,
+                    blooming_results = {
+                        'blooming_start_date': blooming_date,
                         'method': 'NDVI Acceleration Peak',
                         'confidence': confidence,
-                        'ndvi_at_flowering': df.loc[max_accel_idx, 'yhat'],
+                        'ndvi_at_blooming': df.loc[max_accel_idx, 'yhat'],
                         'acceleration_value': df.loc[max_accel_idx, 'ndvi_acceleration']
                     }
     
     # Default return if no method worked
-    if not flowering_results:
-        flowering_results = {
-            'flowering_start_date': None,
+    if not blooming_results:
+        blooming_results = {
+            'blooming_start_date': None,
             'method': method,
             'confidence': 0,
-            'error': 'Unable to determine flowering date with selected method'
+            'error': 'Unable to determine blooming date with selected method'
         }
     
-    return flowering_results
+    return blooming_results
 
 
 def _predict_ndvi_with_ml(history_data: List[Dict[str, Any]], weather_df: pd.DataFrame, 
                          target_year: int) -> Dict[str, Any]:
-    """Use ML model to predict NDVI and flowering dates."""
+    """Use ML model to predict NDVI and blooming dates."""
     try:
         model = _load_ml_model()
         if model is None:
@@ -424,18 +424,18 @@ def _predict_ndvi_with_ml(history_data: List[Dict[str, Any]], weather_df: pd.Dat
         # Make predictions
         forecast = model.predict(future_df)
         
-        # Calculate flowering dates using multiple methods
+        # Calculate blooming dates using multiple methods
         methods = ['ndvi_threshold', 'ndvi_acceleration']
-        flowering_predictions = {}
+        blooming_predictions = {}
         
         for method in methods:
-            result = _calculate_flowering_start_date_ml(forecast, method)
-            flowering_predictions[method] = result
+            result = _calculate_blooming_start_date_ml(forecast, method)
+            blooming_predictions[method] = result
         
         # Select best prediction (highest confidence)
-        best_method = max(flowering_predictions.keys(), 
-                         key=lambda x: flowering_predictions[x]['confidence'])
-        best_prediction = flowering_predictions[best_method]
+        best_method = max(blooming_predictions.keys(), 
+                         key=lambda x: blooming_predictions[x]['confidence'])
+        best_prediction = blooming_predictions[best_method]
         
         # Find NDVI peak from predictions
         ndvi_values = forecast['yhat'].values
@@ -454,9 +454,9 @@ def _predict_ndvi_with_ml(history_data: List[Dict[str, Any]], weather_df: pd.Dat
         return {
             'ndvi_peak': float(ndvi_peak) if ndvi_peak is not None else None,
             'ndvi_peak_at': ndvi_peak_at,
-            'flowering_start_date': best_prediction.get('flowering_start_date'),
-            'flowering_confidence': best_prediction.get('confidence', 0),
-            'flowering_method': best_prediction.get('method'),
+            'blooming_start_date': best_prediction.get('blooming_start_date'),
+            'blooming_confidence': best_prediction.get('confidence', 0),
+            'blooming_method': best_prediction.get('method'),
             'model': 'prophet_ml',
             'predictions': forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].to_dict('records')
         }
@@ -466,9 +466,9 @@ def _predict_ndvi_with_ml(history_data: List[Dict[str, Any]], weather_df: pd.Dat
         return {
             'ndvi_peak': None,
             'ndvi_peak_at': None,
-            'flowering_start_date': None,
-            'flowering_confidence': 0,
-            'flowering_method': None,
+            'blooming_start_date': None,
+            'blooming_confidence': 0,
+            'blooming_method': None,
             'model': 'heuristic_fallback',
             'error': str(exc)
         }
@@ -863,8 +863,8 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
         monitor.logger.info("Forecast NDVI peak %.3f", ml_results.get('ndvi_peak', 0.0))
         ndvi_peak = ml_results.get('ndvi_peak')
         ndvi_peak_at = ml_results.get('ndvi_peak_at')
-        flowering_start_date = ml_results.get('flowering_start_date')
-        flowering_confidence = ml_results.get('flowering_confidence', 0)
+        blooming_start_date = ml_results.get('blooming_start_date')
+        blooming_confidence = ml_results.get('blooming_confidence', 0)
         model_name = "prophet_ml"
         
         # Add ML predictions to history with type 1
@@ -913,9 +913,9 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
         if match_ratio < min_match:
             match_ratio = min(min_match, 1.0)
         
-        # Boost confidence if we have flowering prediction
-        if flowering_confidence > match_ratio:
-            match_ratio = min(1.0, (match_ratio + flowering_confidence) / 2)
+        # Boost confidence if we have blooming prediction
+        if blooming_confidence > match_ratio:
+            match_ratio = min(1.0, (match_ratio + blooming_confidence) / 2)
             
     else:
         # Fall back to heuristic method
@@ -924,8 +924,8 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
         ndvi_values = [entry["ndvi"] for entry in history if entry["ndvi"] is not None]
         ndvi_peak = max(ndvi_values) if ndvi_values else None
         ndvi_peak_at = None
-        flowering_start_date = None
-        flowering_confidence = 0
+        blooming_start_date = None
+        blooming_confidence = 0
         
         if ndvi_peak is not None:
             for entry in history:
@@ -964,7 +964,7 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
     yield_per_ha = float(yield_profile.get("yield_t_per_ha") or 0.0)
     yield_tph = yield_per_ha * match_ratio
 
-    # Prepare forecast response with flowering information
+    # Prepare forecast response with blooming information
     forecast_dict = {
         "year": forecast_year,
         "yieldTph": round(yield_tph, 2),
@@ -975,16 +975,16 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
         "ndviModel": model_name,
     }
     
-    # Add flowering information if available
-    if flowering_start_date is not None:
-        if isinstance(flowering_start_date, pd.Timestamp):
-            flowering_start_date = flowering_start_date.to_pydatetime()
-        if isinstance(flowering_start_date, datetime):
-            if flowering_start_date.tzinfo is None:
-                flowering_start_date = flowering_start_date.replace(tzinfo=timezone.utc)
-            forecast_dict["ndviStartAt"] = _isoformat_utc(flowering_start_date)
-            forecast_dict["ndviStartConfidence"] = round(flowering_confidence, 2)
-            forecast_dict["ndviStartMethod"] = ml_results.get('flowering_method')
+    # Add blooming information if available
+    if blooming_start_date is not None:
+        if isinstance(blooming_start_date, pd.Timestamp):
+            blooming_start_date = blooming_start_date.to_pydatetime()
+        if isinstance(blooming_start_date, datetime):
+            if blooming_start_date.tzinfo is None:
+                blooming_start_date = blooming_start_date.replace(tzinfo=timezone.utc)
+            forecast_dict["ndviStartAt"] = _isoformat_utc(blooming_start_date)
+            forecast_dict["ndviStartConfidence"] = round(blooming_confidence, 2)
+            forecast_dict["ndviStartMethod"] = ml_results.get('blooming_method')
 
     anomalies: List[Dict[str, Any]] = []
     try:
