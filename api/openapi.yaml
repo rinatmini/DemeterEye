@@ -126,8 +126,6 @@ components:
           type: string
           format: date-time
           nullable: true
-        yieldModel:
-          type: string
         yieldConfidence:
           type: number
           format: float
@@ -136,10 +134,12 @@ components:
           type: string
           format: date-time
           nullable: true
-        ndviEndAt:
-          type: string
-          format: date-time
+        ndviStartConfidence:
+          type: number
+          format: float
           nullable: true
+        ndviStartMethod:
+          type: string
         ndviModel:
           type: string
         ndviConfidence:
