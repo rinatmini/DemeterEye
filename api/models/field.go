@@ -17,9 +17,10 @@ type Field struct {
 	CreatedAt time.Time          `bson:"createdAt"    json:"createdAt"`
 
 	// Injected-only (NOT stored in Mongo):
-	Status   ReportStatus    `bson:"-" json:"status"`
-	Forecast *ReportForecast `bson:"-" json:"forecast,omitempty"`
-	History  []ReportDaily   `bson:"-" json:"history,omitempty"`
+	Status    ReportStatus    `bson:"-" json:"status"`
+	Forecast  *ReportForecast `bson:"-" json:"forecast,omitempty"`
+	History   []ReportDaily   `bson:"-" json:"history,omitempty"`
+	Anomalies []Anomaly       `bson:"-" json:"anomalies,omitempty"`
 
 	// Visual
 	Photo string `bson:"photo,omitempty" json:"photo,omitempty"` // URL to field avatar/photo

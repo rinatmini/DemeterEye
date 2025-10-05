@@ -80,8 +80,6 @@ func enrichFieldWithLatestReport(ctx context.Context, a *App, f *models.Field) {
 		return
 	}
 
-	log.Println("doc", doc)
-
 	switch doc.Status {
 	case "processing":
 		f.Status = models.ReportStatusProcessing
@@ -171,6 +169,21 @@ func enrichFieldWithLatestReport(ctx context.Context, a *App, f *models.Field) {
 		ff.YieldConfidence = toFloatPtr(doc.Forecast["confidence"])
 
 		f.Forecast = ff
+	}
+
+	if doc.Anomalies != nil && len(doc.Anomalies) > 0 {
+		anomalies := make([]models.Anomaly, len(doc.Anomalies))
+		for i, a := range doc.Anomalies {
+			anomalies[i] = models.Anomaly{
+				Key:        a["key"].(string),
+				Title:      a["title"].(string),
+				Triggered:  a["triggered"].(bool),
+				Severity:   a["severity"].(string),
+				DetectedAt: parseRFC3339Ptr(a["detectedAt"]),
+				// Details:    a["details"].(map[string]any),
+			}
+		}
+		f.Anomalies = anomalies
 	}
 }
 
@@ -379,7 +392,6 @@ func (a *App) handleUpdateField(w http.ResponseWriter, r *http.Request) {
 		yt2 = strings.TrimSpace(out.Meta.Crop)
 	}
 	if len(req.Geometry) > 0 && yt2 != "" {
-		log.Println("req", req)
 		if _, perr := a.PostProcessorReports(ctx, processorReportReq{
 			FieldID:   out.ID.Hex(),
 			GeoJSON:   req.Geometry,
