@@ -333,6 +333,51 @@ def _calculate_blooming_start_date_ml(forecast_data: pd.DataFrame, method: str =
     
     return blooming_results
 
+def _average_blooming_start_from_history(history: List[Dict[str, Any]], target_year: int, threshold: float = 0.65) -> Tuple[Optional[datetime], int]:
+    """Estimate blooming start from historical NDVI observations."""
+    if not history:
+        return None, 0
+
+    yearly_entries: Dict[int, List[Tuple[datetime, float]]] = {}
+    for entry in history:
+        if entry.get("type") == 1:
+            continue
+        raw_date = entry.get("date")
+        ndvi_value = entry.get("ndvi")
+        if raw_date is None or ndvi_value is None:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if dt.year >= target_year:
+            continue
+        try:
+            ndvi = float(ndvi_value)
+        except (TypeError, ValueError):
+            continue
+        yearly_entries.setdefault(dt.year, []).append((dt, ndvi))
+
+    blooming_days: List[int] = []
+    for year, entries in yearly_entries.items():
+        entries.sort(key=lambda item: item[0])
+        for dt, ndvi in entries:
+            if ndvi >= threshold:
+                blooming_days.append(dt.timetuple().tm_yday)
+                break
+
+    if not blooming_days:
+        return None, 0
+
+    avg_day = int(round(sum(blooming_days) / len(blooming_days)))
+    max_day = 366 if calendar.isleap(target_year) else 365
+    avg_day = max(1, min(avg_day, max_day))
+    avg_date = datetime(target_year, 1, 1, tzinfo=timezone.utc) + timedelta(days=avg_day - 1)
+    return avg_date, len(blooming_days)
+
+
 
 def _predict_ndvi_with_ml(history_data: List[Dict[str, Any]], weather_df: pd.DataFrame, 
                          target_year: int) -> Dict[str, Any]:
@@ -976,6 +1021,8 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
     }
     
     # Add blooming information if available
+    heuristic_blooming_date: Optional[datetime] = None
+    heuristic_samples = 0
     if blooming_start_date is not None:
         if isinstance(blooming_start_date, pd.Timestamp):
             blooming_start_date = blooming_start_date.to_pydatetime()
@@ -985,6 +1032,13 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
             forecast_dict["ndviStartAt"] = _isoformat_utc(blooming_start_date)
             forecast_dict["ndviStartConfidence"] = round(blooming_confidence, 2)
             forecast_dict["ndviStartMethod"] = ml_results.get('blooming_method')
+    else:
+        heuristic_blooming_date, heuristic_samples = _average_blooming_start_from_history(history, forecast_year)
+        if heuristic_blooming_date is not None:
+            forecast_dict["ndviStartAt"] = _isoformat_utc(heuristic_blooming_date)
+            heuristic_confidence = min(0.8, 0.4 + 0.1 * heuristic_samples) if heuristic_samples else 0.0
+            forecast_dict["ndviStartConfidence"] = round(heuristic_confidence, 2)
+            forecast_dict["ndviStartMethod"] = "euristic"
 
     anomalies: List[Dict[str, Any]] = []
     try:
