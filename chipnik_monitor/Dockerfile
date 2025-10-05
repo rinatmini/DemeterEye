@@ -27,6 +27,7 @@ COPY api.py ./
 COPY chipnik_monitor.py ./  
 COPY geojsons ./geojsons  
 COPY media ./media  
+COPY anomalies.py ./  
 
 ENV GDAL_DATA=/usr/share/gdal \
     PROJ_LIB=/usr/share/proj
