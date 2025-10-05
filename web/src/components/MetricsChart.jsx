@@ -212,7 +212,7 @@ export default function MetricsChart({ history = [] }) {
                   dot={false}
                   strokeWidth={2}
                   stroke={COLORS.ndvi}
-                  connectNulls={false}
+                  connectNulls
                 />
                 <Line
                   type="monotone"
@@ -239,7 +239,7 @@ export default function MetricsChart({ history = [] }) {
                   dot={false}
                   strokeWidth={1.5}
                   stroke={COLORS.temperature_deg_c}
-                  connectNulls={false}
+                  connectNulls
                 />
                 <Line
                   type="monotone"
@@ -267,7 +267,7 @@ export default function MetricsChart({ history = [] }) {
                   dot={false}
                   strokeWidth={1.5}
                   stroke={COLORS.wind_speed_mps}
-                  connectNulls={false}
+                  connectNulls
                 />
                 <Line
                   type="monotone"
@@ -295,7 +295,7 @@ export default function MetricsChart({ history = [] }) {
                   dot={false}
                   strokeWidth={1.5}
                   stroke={COLORS.cloudcover_pct}
-                  connectNulls={false}
+                  connectNulls
                 />
                 <Line
                   type="monotone"
@@ -323,7 +323,7 @@ export default function MetricsChart({ history = [] }) {
                   dot={false}
                   strokeWidth={1.5}
                   stroke={COLORS.clarity_pct}
-                  connectNulls={false}
+                  connectNulls
                 />
                 <Line
                   type="monotone"
@@ -351,7 +351,7 @@ export default function MetricsChart({ history = [] }) {
                   dot={false}
                   strokeWidth={1.5}
                   stroke={COLORS.humidity_pct}
-                  connectNulls={false}
+                  connectNulls
                 />
                 <Line
                   type="monotone"
