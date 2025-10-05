@@ -14,7 +14,10 @@ export async function apiFetch(path, { method = "GET", body, token } = {}) {
 
   const raw = await res.text();
   if (!res.ok) {
-    throw new Error(`${res.status} ${res.statusText}: ${raw}`);
+    const err = new Error(raw?.message || res.statusText);
+    err.status = res.status;
+    err.body = raw;
+    throw err;
   }
 
   try {

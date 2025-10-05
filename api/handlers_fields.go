@@ -115,6 +115,28 @@ func enrichFieldWithLatestReport(ctx context.Context, a *App, f *models.Field) {
 				WindSpeedMps:   toFloatPtr(it["wind_speed_mps"]),
 				ClarityPct:     toFloatPtr(it["clarity_pct"]),
 			}
+
+			// Populate point type for the UI safely: 0 = actual, 1 = forecast
+			if tv, ok := it["type"]; ok && tv != nil {
+				switch t := tv.(type) {
+				case int:
+					entry.Type = t
+				case int32:
+					entry.Type = int(t)
+				case int64:
+					entry.Type = int(t)
+				case float64:
+					entry.Type = int(math.Round(t))
+				default:
+					entry.Type = 0
+				}
+			} else if isFc, ok := it["isForecast"].(bool); ok && isFc {
+				entry.Type = 1
+			} else if isFc2, ok := it["isForcast"].(bool); ok && isFc2 {
+				entry.Type = 1
+			} else {
+				entry.Type = 0
+			}
 			h = append(h, entry)
 		}
 		if len(h) > 0 {
@@ -124,7 +146,7 @@ func enrichFieldWithLatestReport(ctx context.Context, a *App, f *models.Field) {
 
 	if doc.Forecast != nil && len(doc.Forecast) > 0 {
 		ff := &models.ReportForecast{
-			Model: "eurustic",
+			YieldModel: "eurustic",
 		}
 		// year
 		if y, ok := doc.Forecast["year"].(int32); ok {
@@ -144,9 +166,9 @@ func enrichFieldWithLatestReport(ctx context.Context, a *App, f *models.Field) {
 		ff.NDVIPeak = toFloatPtr(doc.Forecast["ndviPeak"])
 		ff.NDVIPeakAt = parseRFC3339Ptr(doc.Forecast["ndviPeakAt"])
 		if m, ok := doc.Forecast["model"].(string); ok && m != "" {
-			ff.Model = m
+			ff.YieldModel = m
 		}
-		ff.Confidence = toFloatPtr(doc.Forecast["confidence"])
+		ff.YieldConfidence = toFloatPtr(doc.Forecast["confidence"])
 
 		f.Forecast = ff
 	}

@@ -33,7 +33,12 @@ export default function AuthScreen() {
       localStorage.setItem("token", res.token);
       nav(redirectTo, { replace: true });
     } catch (e) {
-      setErr(e.message);
+      console.log(e);
+      if (e.status === 401) {
+        setErr("Incorrect email or password");
+      } else {
+        setErr(e.message || "An unexpected error occurred");
+      }
     } finally {
       setLoading(false);
     }
