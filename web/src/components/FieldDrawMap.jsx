@@ -15,7 +15,7 @@ import L from "leaflet";
 export default function FieldDrawMap({
   value, // GeoJSON geometry: Polygon | MultiPolygon
   onChange,
-  initialCenter = [47.4554598, -122.2208032],
+  initialCenter = [42.6038936, -113.7710083], // 42.6038936,-113.7710083
   initialZoom = 14,
   rememberView = true,
   fitToGeometry = true,
