@@ -342,9 +342,9 @@ def _predict_ndvi_with_ml(history_data: List[Dict[str, Any]], weather_df: pd.Dat
         if training_df.empty:
             raise ValueError("No valid training data available")
         
-        # Create future dates for prediction (next year)
-        current_year = datetime.now().year
-        future_start = datetime(target_year, 1, 1)
+        # Create future dates for prediction (from current time forward)
+        current_time = datetime.now()
+        future_start = current_time
         future_end = datetime(target_year, 12, 31)
         
         # Create future dataframe with 16-day intervals (satellite revisit cycle)
@@ -723,7 +723,7 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
             "yieldTph": 0.0,
             "ndviPeak": None,
             "ndviPeakAt": None,
-            "model": _DEFAULT_MODEL,
+            "ndviModel": _DEFAULT_MODEL,
             "confidence": 0.0,
             "yieldType": yield_profile["name"],
         }
@@ -749,7 +749,7 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
     history: List[Dict[str, Any]] = []
     report_records: List[Dict[str, Any]] = []
 
-    for row in rows:
+    for i, row in enumerate(rows):
         report = monitor.compute_index_for_row(row, index_types=index_types, bbox=bbox, token=token)
         if not report:
             continue
@@ -775,24 +775,32 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
 
         weather = weather_lookup.get(report_dt.date())
 
-        history.append(
-            {
-                "date": _isoformat_utc(report_dt),
-                "ndvi": report.get("mean_NDVI"),
-                "cloud_cover": float(row.cloud_cover) if getattr(row, "cloud_cover", None) is not None else None,
-                "collection": getattr(row, "collection", None),
-                "temperature_deg_c": weather["temperature_deg_c"] if weather else None,
-                "humidity_pct": weather["humidity_pct"] if weather else None,
-                "cloudcover_pct": weather["cloudcover_pct"] if weather else None,
-                "wind_speed_mps": weather["wind_speed_mps"] if weather else None,
-                "clarity_pct": weather["clarity_pct"] if weather else None,
-            }
-        )
+        # Add historical data point
+        historical_entry = {
+            "date": _isoformat_utc(report_dt),
+            "ndvi": report.get("mean_NDVI"),
+            "cloud_cover": float(row.cloud_cover) if getattr(row, "cloud_cover", None) is not None else None,
+            "collection": getattr(row, "collection", None),
+            "temperature_deg_c": weather["temperature_deg_c"] if weather else None,
+            "humidity_pct": weather["humidity_pct"] if weather else None,
+            "cloudcover_pct": weather["cloudcover_pct"] if weather else None,
+            "wind_speed_mps": weather["wind_speed_mps"] if weather else None,
+            "clarity_pct": weather["clarity_pct"] if weather else None,
+            "type": 0,  # 0 = historic data, 1 = ML predicted data
+        }
+        
+        history.append(historical_entry)
+        
+        # For the last row, append a copy with type 1
+        if i == len(rows) - 1:
+            transition_entry = historical_entry.copy()
+            transition_entry["type"] = 1
+            history.append(transition_entry)
 
     history.sort(key=lambda item: item["date"])
 
     # Try ML prediction first, fall back to heuristic method
-    forecast_year = end_dt.year + 1
+    forecast_year = end_dt.year
     ml_results = _predict_ndvi_with_ml(history, weather_df, forecast_year)
     
     if ml_results.get('model') == 'prophet_ml':
@@ -803,6 +811,39 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
         flowering_start_date = ml_results.get('flowering_start_date')
         flowering_confidence = ml_results.get('flowering_confidence', 0)
         model_name = "prophet_ml"
+        
+        # Add ML predictions to history with type 1
+        ml_predictions = ml_results.get('predictions', [])
+        for prediction in ml_predictions:
+            pred_date = prediction['ds']
+            if isinstance(pred_date, str):
+                try:
+                    pred_dt = pd.to_datetime(pred_date).to_pydatetime()
+                except Exception:
+                    continue
+            elif isinstance(pred_date, pd.Timestamp):
+                pred_dt = pred_date.to_pydatetime()
+            else:
+                pred_dt = pred_date
+            
+            if pred_dt.tzinfo is None:
+                pred_dt = pred_dt.replace(tzinfo=timezone.utc)
+            
+            history.append({
+                "date": _isoformat_utc(pred_dt),
+                "ndvi": round(float(prediction['yhat']), 4),
+                "cloud_cover": None,  # No cloud cover for predictions
+                "collection": "ML_Prediction",
+                "temperature_deg_c": None,  # Weather data not included in predictions
+                "humidity_pct": None,
+                "cloudcover_pct": None,
+                "wind_speed_mps": None,
+                "clarity_pct": None,
+                "type": 1,  # 1 = ML predicted data
+            })
+        
+        # Re-sort history after adding predictions
+        history.sort(key=lambda item: item["date"])
         
         # Calculate yield based on ML predictions
         reference_ndvi = ndvi_peak if ndvi_peak is not None else 0.0
@@ -872,11 +913,11 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
     forecast_dict = {
         "year": forecast_year,
         "yieldTph": round(yield_tph, 2),
+        "yieldType": yield_profile["name"],
+        "yieldConfidence": round(match_ratio, 2),
         "ndviPeak": round(ndvi_peak, 2) if ndvi_peak is not None else None,
         "ndviPeakAt": ndvi_peak_at,
-        "model": model_name,
-        "confidence": round(match_ratio, 2),
-        "yieldType": yield_profile["name"],
+        "ndviModel": model_name,
     }
     
     # Add flowering information if available
@@ -886,9 +927,9 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
         if isinstance(flowering_start_date, datetime):
             if flowering_start_date.tzinfo is None:
                 flowering_start_date = flowering_start_date.replace(tzinfo=timezone.utc)
-            forecast_dict["floweringStartDate"] = _isoformat_utc(flowering_start_date)
-            forecast_dict["floweringConfidence"] = round(flowering_confidence, 2)
-            forecast_dict["floweringMethod"] = ml_results.get('flowering_method')
+            forecast_dict["ndviStartAt"] = _isoformat_utc(flowering_start_date)
+            forecast_dict["ndviStartConfidence"] = round(flowering_confidence, 2)
+            forecast_dict["ndviStartMethod"] = ml_results.get('flowering_method')
 
     return {"history": history, "forecast": forecast_dict}
 
