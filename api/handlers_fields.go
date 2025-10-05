@@ -114,7 +114,28 @@ func enrichFieldWithLatestReport(ctx context.Context, a *App, f *models.Field) {
 				CloudcoverPct:  toFloatPtr(it["cloudcover_pct"]),
 				WindSpeedMps:   toFloatPtr(it["wind_speed_mps"]),
 				ClarityPct:     toFloatPtr(it["clarity_pct"]),
-				Type:           int(it["type"].(int32)),
+			}
+
+			// Populate point type for the UI safely: 0 = actual, 1 = forecast
+			if tv, ok := it["type"]; ok && tv != nil {
+				switch t := tv.(type) {
+				case int:
+					entry.Type = t
+				case int32:
+					entry.Type = int(t)
+				case int64:
+					entry.Type = int(t)
+				case float64:
+					entry.Type = int(math.Round(t))
+				default:
+					entry.Type = 0
+				}
+			} else if isFc, ok := it["isForecast"].(bool); ok && isFc {
+				entry.Type = 1
+			} else if isFc2, ok := it["isForcast"].(bool); ok && isFc2 {
+				entry.Type = 1
+			} else {
+				entry.Type = 0
 			}
 			h = append(h, entry)
 		}
