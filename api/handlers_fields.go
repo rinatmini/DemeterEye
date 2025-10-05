@@ -114,6 +114,7 @@ func enrichFieldWithLatestReport(ctx context.Context, a *App, f *models.Field) {
 				CloudcoverPct:  toFloatPtr(it["cloudcover_pct"]),
 				WindSpeedMps:   toFloatPtr(it["wind_speed_mps"]),
 				ClarityPct:     toFloatPtr(it["clarity_pct"]),
+				Type:           int(it["type"].(int32)),
 			}
 			h = append(h, entry)
 		}
@@ -124,7 +125,7 @@ func enrichFieldWithLatestReport(ctx context.Context, a *App, f *models.Field) {
 
 	if doc.Forecast != nil && len(doc.Forecast) > 0 {
 		ff := &models.ReportForecast{
-			Model: "eurustic",
+			YieldModel: "eurustic",
 		}
 		// year
 		if y, ok := doc.Forecast["year"].(int32); ok {
@@ -144,9 +145,9 @@ func enrichFieldWithLatestReport(ctx context.Context, a *App, f *models.Field) {
 		ff.NDVIPeak = toFloatPtr(doc.Forecast["ndviPeak"])
 		ff.NDVIPeakAt = parseRFC3339Ptr(doc.Forecast["ndviPeakAt"])
 		if m, ok := doc.Forecast["model"].(string); ok && m != "" {
-			ff.Model = m
+			ff.YieldModel = m
 		}
-		ff.Confidence = toFloatPtr(doc.Forecast["confidence"])
+		ff.YieldConfidence = toFloatPtr(doc.Forecast["confidence"])
 
 		f.Forecast = ff
 	}
