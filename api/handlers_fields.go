@@ -143,9 +143,7 @@ func enrichFieldWithLatestReport(ctx context.Context, a *App, f *models.Field) {
 	}
 
 	if doc.Forecast != nil && len(doc.Forecast) > 0 {
-		ff := &models.ReportForecast{
-			YieldModel: "eurustic",
-		}
+		ff := &models.ReportForecast{}
 		// year
 		if y, ok := doc.Forecast["year"].(int32); ok {
 			ff.Year = int(y)
@@ -160,13 +158,35 @@ func enrichFieldWithLatestReport(ctx context.Context, a *App, f *models.Field) {
 			ff.Year = int(y)
 		}
 
-		ff.YieldTph = toFloatPtr(doc.Forecast["yieldTph"])
-		ff.NDVIPeak = toFloatPtr(doc.Forecast["ndviPeak"])
-		ff.NDVIPeakAt = parseRFC3339Ptr(doc.Forecast["ndviPeakAt"])
-		if m, ok := doc.Forecast["model"].(string); ok && m != "" {
-			ff.YieldModel = m
+		if y, ok := doc.Forecast["yieldTph"].(float64); ok {
+			ff.YieldTph = toFloatPtr(y)
 		}
-		ff.YieldConfidence = toFloatPtr(doc.Forecast["confidence"])
+		if y, ok := doc.Forecast["yieldConfidence"].(float64); ok {
+			ff.YieldConfidence = toFloatPtr(y)
+		}
+
+		if y, ok := doc.Forecast["ndviPeak"].(float64); ok {
+			ff.NDVIPeak = toFloatPtr(y)
+		}
+		if y, ok := doc.Forecast["ndviPeakAt"].(string); ok {
+			ff.NDVIPeakAt = parseRFC3339Ptr(y)
+		}
+		if y, ok := doc.Forecast["ndviModel"].(string); ok {
+			ff.NDVIModel = y
+		}
+		if y, ok := doc.Forecast["ndviStartAt"].(string); ok {
+			ff.NDVIStartAt = parseRFC3339Ptr(y)
+		}
+		if y, ok := doc.Forecast["ndviStartConfidence"].(float64); ok {
+			ff.NDVIStartConfidence = toFloatPtr(y)
+		}
+		if y, ok := doc.Forecast["ndviStartMethod"].(string); ok {
+			ff.NDVIStartMethod = y
+		}
+		if y, ok := doc.Forecast["ndviConfidence"].(float64); ok {
+			ff.NDVIConfidence = toFloatPtr(y)
+		}
+		// ff.NDVIEndAt = parseRFC3339Ptr(doc.Forecast["ndviEndAt"])
 
 		f.Forecast = ff
 	}

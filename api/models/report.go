@@ -43,16 +43,19 @@ type ReportDaily struct {
 
 // ReportForecast — forecast section produced by the processor.
 type ReportForecast struct {
-	Year            int        `bson:"year"                 json:"year"`
-	YieldTph        *float64   `bson:"yieldTph,omitempty"   json:"yieldTph,omitempty"`
-	YieldModel      string     `bson:"yieldModel,omitempty" json:"yieldModel,omitempty"`
+	Year     int      `bson:"year"                 json:"year"`
+	YieldTph *float64 `bson:"yieldTph,omitempty"   json:"yieldTph,omitempty"`
+	// YieldModel      string     `bson:"yieldModel,omitempty" json:"yieldModel,omitempty"`
 	YieldConfidence *float64   `bson:"yieldConfidence,omitempty" json:"yieldConfidence,omitempty"`
 	NDVIPeak        *float64   `bson:"ndviPeak,omitempty"   json:"ndviPeak,omitempty"`
 	NDVIPeakAt      *time.Time `bson:"ndviPeakAt,omitempty" json:"ndviPeakAt,omitempty"`
+	NDVIModel       string     `bson:"ndviModel,omitempty" json:"ndviModel,omitempty"`
 	NDVIStartAt     *time.Time `bson:"ndviStartAt,omitempty" json:"ndviStartAt,omitempty"`
-	NDVIEndAt       *time.Time `bson:"ndviEndAt,omitempty" json:"ndviEndAt,omitempty"`
-	NDVIModel       string     `bson:"ndviModel,omitempty"      json:"ndviModel,omitempty"`
-	NDVIConfidence  *float64   `bson:"ndviConfidence,omitempty" json:"ndviConfidence,omitempty"`
+	// NDVIEndAt       *time.Time `bson:"ndviEndAt,omitempty" json:"ndviEndAt,omitempty"`
+	// NDVIStartModel       string     `bson:"ndviStartMethod,omitempty"      json:"ndviStartMethod,omitempty"`
+	NDVIStartConfidence *float64 `bson:"ndviStartConfidence,omitempty" json:"ndviStartConfidence,omitempty"`
+	NDVIConfidence      *float64 `bson:"ndviConfidence,omitempty" json:"ndviConfidence,omitempty"`
+	NDVIStartMethod     string   `bson:"ndviStartMethod,omitempty" json:"ndviStartMethod,omitempty"`
 }
 
 // Anomaly mirrors anomaly results from chipnik_monitor/anomalies.py

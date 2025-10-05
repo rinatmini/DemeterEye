@@ -69,7 +69,12 @@ export default function FieldDetails() {
 
   // repeat every 10 seconds
   useEffect(() => {
-    const interval = setInterval(() => upload(), 10000);
+    const interval = setInterval(() => {
+      if (field?.status === "processing") {
+        upload();
+        return;
+      }
+    }, 10000);
     return () => clearInterval(interval);
   }, [id]);
 
@@ -237,20 +242,20 @@ export default function FieldDetails() {
                   <dd>{field.forecast.ndviStartAt?.slice?.(0, 10) ?? "—"}</dd>
                 </div>
                 <div className="flex justify-between py-1">
-                  <dt>Blooming peak at</dt>
-                  <dd>{field.forecast.ndviPeakAt?.slice?.(0, 10) ?? "—"}</dd>
-                </div>
-                <div className="flex justify-between py-1">
-                  <dt>Blooming end at</dt>
-                  <dd>{field.forecast.ndviEndAt?.slice?.(0, 10) ?? "—"}</dd>
-                </div>
-                <div className="flex justify-between py-1">
-                  <dt>Blooming confidence</dt>
+                  <dt>Blooming start confidence</dt>
                   <dd>
-                    {field.forecast.ndviConfidence != null
-                      ? Math.round(field.forecast.ndviConfidence * 100) + "%"
+                    {field.forecast.ndviStartConfidence != null
+                      ? Math.round(field.forecast.ndviStartConfidence * 100) + "%"
                       : "—"}
                   </dd>
+                </div>
+                <div className="flex justify-between py-1">
+                  <dt>Blooming start method</dt>
+                  <dd>{field.forecast.ndviStartMethod ?? "—"}</dd>
+                </div>
+                <div className="flex justify-between py-1">
+                  <dt>Blooming peak at</dt>
+                  <dd>{field.forecast.ndviPeakAt?.slice?.(0, 10) ?? "—"}</dd>
                 </div>
                 <div className="flex justify-between py-1">
                   <dt>NDVI model</dt>
@@ -272,10 +277,6 @@ export default function FieldDetails() {
                       ? Math.round(field.forecast.yieldConfidence * 100) + "%"
                       : "—"}
                   </dd>
-                </div>
-                <div className="flex justify-between py-1">
-                  <dt>Yield model</dt>
-                  <dd>{field.forecast.yieldModel ?? "—"}</dd>
                 </div>
               </dl>
             </>
