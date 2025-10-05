@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -21,6 +21,10 @@ from pymongo import MongoClient  # type: ignore
 from pymongo.collection import Collection  # type: ignore
 
 import chipnik_monitor as monitor
+try:
+    from chipnik_monitor.anomalies import detect_anomalies
+except ModuleNotFoundError:
+    from anomalies import detect_anomalies
 
 # ML model imports
 import numpy as np
@@ -472,7 +476,8 @@ def _predict_ndvi_with_ml(history_data: List[Dict[str, Any]], weather_df: pd.Dat
 def _persist_report_state(operation_id: str, geojson_payload: Union[str, Dict[str, Any]], yield_type: str,
                           status: str, field_id: Optional[str] = None,
                           history: Optional[List[Dict[str, Any]]] = None,
-                          forecast: Optional[Dict[str, Any]] = None, error_message: Optional[str] = None) -> None:
+                          forecast: Optional[Dict[str, Any]] = None,
+                          anomalies: Optional[List[Dict[str, Any]]] = None, error_message: Optional[str] = None) -> None:
     collection = _get_reports_collection()
 
     state = _get_operation(operation_id)
@@ -490,6 +495,7 @@ def _persist_report_state(operation_id: str, geojson_payload: Union[str, Dict[st
         "geojson": _serialisable_geojson(geojson_payload),
         "history": history,
         "forecast": forecast,
+        "anomalies": anomalies,
         "errorMessage": error_message,
     }
 
@@ -651,6 +657,7 @@ def _get_persisted_operation(op_id: str) -> Optional[Dict[str, Any]]:
 
     history = document.get("history")
     forecast = document.get("forecast")
+    anomalies = document.get("anomalies")
 
     state: Dict[str, Any] = {
         "status": document.get("status"),
@@ -662,10 +669,11 @@ def _get_persisted_operation(op_id: str) -> Optional[Dict[str, Any]]:
         "error": document.get("errorMessage"),
     }
 
-    if history is not None or forecast is not None:
+    if history is not None or forecast is not None or anomalies is not None:
         state["result"] = {
             "history": history,
             "forecast": forecast,
+            "anomalies": anomalies,
         }
 
     return state
@@ -688,7 +696,7 @@ def _run_report_job(op_id: str, geojson_payload: Union[str, Dict[str, Any]], yie
         return
     _update_operation(op_id, status="ready", result=report, error=None)
     try:
-        _persist_report_state(op_id, geojson_payload, yield_profile.get("name", ""), status="ready", field_id=field_id, history=report.get("history"), forecast=report.get("forecast"))
+        _persist_report_state(op_id, geojson_payload, yield_profile.get("name", ""), status="ready", field_id=field_id, history=report.get("history"), forecast=report.get("forecast"), anomalies=report.get("anomalies"))
     except Exception:
         monitor.logger.exception("Failed to persist report state for %s", op_id)
 
@@ -931,7 +939,14 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
             forecast_dict["ndviStartConfidence"] = round(flowering_confidence, 2)
             forecast_dict["ndviStartMethod"] = ml_results.get('flowering_method')
 
-    return {"history": history, "forecast": forecast_dict}
+    anomalies: List[Dict[str, Any]] = []
+    try:
+        history_frame = pd.DataFrame(history) if history else pd.DataFrame()
+        anomalies, _ = detect_anomalies(history_frame, weather_df)
+    except Exception:
+        monitor.logger.exception("Anomaly detection failed during report generation")
+        anomalies = []
+    return {"history": history, "forecast": forecast_dict, "anomalies": anomalies}
 
 
 @app.post("/reports", status_code=202)
