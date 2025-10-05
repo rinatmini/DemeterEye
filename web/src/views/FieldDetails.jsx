@@ -212,6 +212,133 @@ export default function FieldDetails() {
         )}
       </div>
 
+      {/* FORECAST + ANOMALIES */}
+      <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
+        {/* LEFT: Forecast */}
+        <div className="rounded-2xl border bg-white p-4">
+          <div className="font-semibold mb-2">Forecast</div>
+          {field.forecast ? (
+            <>
+              <dl className="text-sm">
+                <div className="flex justify-between py-1">
+                  <dt>Year</dt>
+                  <dd>{field.forecast.year}</dd>
+                </div>
+              </dl>
+
+              <div className="text-xs uppercase text-gray-500 tracking-wide mt-2 mb-1">Phenology (NDVI)</div>
+              <dl className="text-sm">
+                <div className="flex justify-between py-1">
+                  <dt>Blooming peak</dt>
+                  <dd>{field.forecast.ndviPeak ?? "—"}</dd>
+                </div>
+                <div className="flex justify-between py-1">
+                  <dt>Blooming start at</dt>
+                  <dd>{field.forecast.ndviStartAt?.slice?.(0, 10) ?? "—"}</dd>
+                </div>
+                <div className="flex justify-between py-1">
+                  <dt>Blooming peak at</dt>
+                  <dd>{field.forecast.ndviPeakAt?.slice?.(0, 10) ?? "—"}</dd>
+                </div>
+                <div className="flex justify-between py-1">
+                  <dt>Blooming end at</dt>
+                  <dd>{field.forecast.ndviEndAt?.slice?.(0, 10) ?? "—"}</dd>
+                </div>
+                <div className="flex justify-between py-1">
+                  <dt>Blooming confidence</dt>
+                  <dd>
+                    {field.forecast.ndviConfidence != null
+                      ? Math.round(field.forecast.ndviConfidence * 100) + "%"
+                      : "—"}
+                  </dd>
+                </div>
+                <div className="flex justify-between py-1">
+                  <dt>NDVI model</dt>
+                  <dd>{field.forecast.ndviModel ?? "—"}</dd>
+                </div>
+              </dl>
+
+              <div className="mt-3 border-t" />
+              <div className="text-xs uppercase text-gray-500 tracking-wide mt-2 mb-1">Yield</div>
+              <dl className="text-sm">
+                <div className="flex justify-between py-1">
+                  <dt>Yield</dt>
+                  <dd>{field.forecast.yieldTph ?? "—"} t/ha</dd>
+                </div>
+                <div className="flex justify-between py-1">
+                  <dt>Confidence yield</dt>
+                  <dd>
+                    {field.forecast.yieldConfidence != null
+                      ? Math.round(field.forecast.yieldConfidence * 100) + "%"
+                      : "—"}
+                  </dd>
+                </div>
+                <div className="flex justify-between py-1">
+                  <dt>Yield model</dt>
+                  <dd>{field.forecast.yieldModel ?? "—"}</dd>
+                </div>
+              </dl>
+            </>
+          ) : (
+            <div className="text-sm text-gray-500">No forecast yet.</div>
+          )}
+        </div>
+
+        {/* RIGHT: Anomalies */}
+        <div className="rounded-2xl border bg-white p-4">
+          <div className="font-semibold mb-2">Anomalies</div>
+          {field.anomalies?.length ? (
+            <div className="space-y-3">
+              {field.anomalies.map((a, i) => (
+                <div key={i} className="rounded-xl border p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="font-medium">{a.title || a.key}</div>
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full border ${
+                        a.severity === "warning"
+                          ? "bg-amber-50 text-amber-700 border-amber-200"
+                          : a.severity === "error"
+                          ? "bg-rose-50 text-rose-700 border-rose-200"
+                          : "bg-gray-50 text-gray-700 border-gray-200"
+                      }`}
+                    >
+                      {a.severity || "info"}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-600 mt-1">
+                    Detected: {a.detectedAt?.slice?.(0, 10) ?? "—"}
+                  </div>
+                  {a.details && Object.keys(a.details || {}).length > 0 && (
+                    <table className="w-full text-sm mt-2">
+                      <tbody>
+                        {Object.entries(a.details).map(([k, v]) => (
+                          <tr key={k} className="border-t">
+                            <td className="py-1 text-gray-500">{k}</td>
+                            <td className="py-1 text-right">
+                              {typeof v === "number"
+                                ? Number.isFinite(v)
+                                  ? Math.round(v * 100) / 100
+                                  : "—"
+                                : v == null
+                                ? "—"
+                                : typeof v === "string"
+                                ? v
+                                : JSON.stringify(v)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm text-gray-500">No anomalies found — the yield will thrive.</div>
+          )}
+        </div>
+      </div>
+
       {/* BELOW: GRID with Map (left) and Sidebar (right) */}
       <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
         {/* LEFT: Map card */}
@@ -260,66 +387,8 @@ export default function FieldDetails() {
           )}
         </div>
 
-        {/* RIGHT: Forecast + About */}
+        {/* RIGHT: About only */}
         <div className="space-y-4">
-          {/* Forecast */}
-          <div className="rounded-2xl border bg-white p-4">
-            <div className="font-semibold mb-2">Forecast</div>
-            {field.forecast ? (
-              <dl className="text-sm">
-                <div className="flex justify-between py-1">
-                  <dt>Year</dt>
-                  <dd>{field.forecast.year}</dd>
-                </div>
-                <div className="flex justify-between py-1">
-                  <dt>Blooming peak</dt>
-                  <dd>{field.forecast.ndviPeak ?? "—"}</dd>
-                </div>
-                <div className="flex justify-between py-1">
-                  <dt>Blooming start at</dt>
-                  <dd>{field.forecast.ndviStartAt?.slice?.(0, 10) ?? "—"}</dd>
-                </div>
-                <div className="flex justify-between py-1">
-                  <dt>Blooming peak at</dt>
-                  <dd>{field.forecast.ndviPeakAt?.slice?.(0, 10) ?? "—"}</dd>
-                </div>
-                <div className="flex justify-between py-1">
-                  <dt>Blooming end at</dt>
-                  <dd>{field.forecast.ndviEndAt?.slice?.(0, 10) ?? "—"}</dd>
-                </div>
-                <div className="flex justify-between py-1">
-                  <dt>Blooming confidence</dt>
-                  <dd>
-                    {field.forecast.ndviConfidence != null
-                      ? Math.round(field.forecast.ndviConfidence * 100) + "%"
-                      : "—"}
-                  </dd>
-                </div>
-                <div className="flex justify-between py-1">
-                  <dt>NDVI model</dt>
-                  <dd>{field.forecast.ndviModel ?? "—"}</dd>
-                </div>
-                <div className="flex justify-between py-1">
-                  <dt>Yield</dt>
-                  <dd>{field.forecast.yieldTph ?? "—"} t/ha</dd>
-                </div>
-                <div className="flex justify-between py-1">
-                  <dt>Confidence yield</dt>
-                  <dd>
-                    {field.forecast.yieldConfidence != null
-                      ? Math.round(field.forecast.yieldConfidence * 100) + "%"
-                      : "—"}
-                  </dd>
-                </div>
-                <div className="flex justify-between py-1">
-                  <dt>Yield model</dt>
-                  <dd>{field.forecast.yieldModel ?? "—"}</dd>
-                </div>
-              </dl>
-            ) : (
-              <div className="text-sm text-gray-500">No forecast yet.</div>
-            )}
-          </div>
 
           {/* About / edit meta */}
           <div className="rounded-2xl border bg-white p-4 space-y-3">
