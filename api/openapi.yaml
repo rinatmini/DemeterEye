@@ -73,6 +73,9 @@ components:
           type: string
           format: date-time
           description: RFC3339 timestamp
+        type:
+          type: integer
+          description: 0 = actual, 1 = forecast
         ndvi:
           type: number
           format: float
@@ -174,6 +177,23 @@ components:
             type: array
             items:
               $ref: '#/components/schemas/YieldEntry'
+
+    UpdateFieldReq:
+      type: object
+      description: Partial update; no required fields. Any provided field will be updated.
+      properties:
+        name: { type: string }
+        geometry:
+          type: object
+          description: GeoJSON Polygon or MultiPolygon (raw JSON)
+        areaHa: { type: number, format: float }
+        notes: { type: string }
+        crop: { type: string }
+        photo: { type: string }
+        yields:
+          type: array
+          items:
+            $ref: '#/components/schemas/YieldEntry'
 
     ProcessorReportReq:
       type: object
@@ -304,7 +324,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateFieldReq'
+              $ref: '#/components/schemas/UpdateFieldReq'
       responses:
         '200':
           description: Updated field
