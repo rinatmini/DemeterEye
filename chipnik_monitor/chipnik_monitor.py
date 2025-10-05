@@ -30,6 +30,10 @@ import json
 import logging
 import concurrent.futures
 import math
+try:
+    from chipnik_monitor.anomalies import detect_anomalies
+except ModuleNotFoundError:
+    from anomalies import detect_anomalies
 import calendar
 import os
 import time
@@ -60,7 +64,7 @@ DEFAULT_RADIUS_KM = 6.0
 
 ENABLE_EVI = os.getenv("ENABLE_EVI", "").strip().lower() in {"1", "true", "yes", "on"}
 
-DEFAULT_DAYS_BACK_LIMIT = 730
+DEFAULT_DAYS_BACK_LIMIT = 720
 _days_back_raw = os.getenv("DAYS_BACK_LIMIT", "").strip()
 if _days_back_raw:
     try:
@@ -1245,7 +1249,314 @@ def fetch_weather_history(lat: float, lon: float, start_date: datetime, end_date
     return daily
 
 
-# Main interface logic
+
+def render_anomaly_section(anomalies_list: List[Dict[str, Any]], anomaly_charts: Dict[str, pd.DataFrame]) -> None:
+    st.subheader("NDVI Anomalies")
+
+    if not anomalies_list:
+        st.info("Not enough data to compute anomalies yet.")
+        return
+
+    category_titles = {
+        "ndvi_volatility": "NDVI Volatility Spike",
+        "early_senescence": "Early Senescence",
+        "late_greenup": "Delayed Greenup",
+        "weatherless_drop": "NDVI Drop Without Weather Driver",
+    }
+    color_map = {
+        "ndvi_volatility": "#d62728",
+        "early_senescence": "#bcbd22",
+        "late_greenup": "#17becf",
+        "weatherless_drop": "#ff7f0e",
+    }
+    marker_symbols = {
+        "ndvi_volatility": "triangle-up",
+        "early_senescence": "diamond",
+        "late_greenup": "square",
+        "weatherless_drop": "x",
+    }
+    category_levels = {
+        "ndvi_volatility": 4,
+        "early_senescence": 3,
+        "late_greenup": 2,
+        "weatherless_drop": 1,
+    }
+
+    def build_detail_parts(data: Any) -> List[str]:
+        if not isinstance(data, dict):
+            return []
+        parts: List[str] = []
+        for key, value in data.items():
+            if value is None or key in {"reason", "status"}:
+                continue
+            if isinstance(value, float):
+                parts.append(f"{key}: {value:.3f}")
+            else:
+                parts.append(f"{key}: {value}")
+            if len(parts) >= 4:
+                break
+        return parts
+
+    for anomaly in anomalies_list:
+        key = anomaly.get("key")
+        title = category_titles.get(key, anomaly.get("title") or (key.replace("_", " ").title() if key else "Anomaly"))
+        triggered = bool(anomaly.get("triggered"))
+        details = anomaly.get("details") or {}
+        detected_at = anomaly.get("detectedAt")
+        summary_parts: List[str] = []
+        if detected_at:
+            summary_parts.append(f"detected {detected_at}")
+        days_early = details.get("daysEarly") if isinstance(details, dict) else None
+        if isinstance(days_early, (int, float)):
+            summary_parts.append(f"{int(round(days_early))} days earlier")
+        delay_days = details.get("delayDays") if isinstance(details, dict) else None
+        if isinstance(delay_days, (int, float)):
+            summary_parts.append(f"{int(round(delay_days))} days later")
+        drop_mag = details.get("dropMagnitude") if isinstance(details, dict) else None
+        if isinstance(drop_mag, (int, float)):
+            summary_parts.append(f"NDVI drop {drop_mag:.3f}")
+        message = " | ".join(summary_parts) if summary_parts else "no key metrics"
+        status_phrase = "Alert" if triggered else "Stable"
+        renderer = st.warning if triggered else st.info
+        renderer(f"**{title}** - {status_phrase}. {message}")
+
+    ndvi_daily_df = anomaly_charts.get("ndvi_daily")
+    if ndvi_daily_df is None or ndvi_daily_df.empty:
+        st.info("NDVI time series unavailable for anomaly chart.")
+        return
+
+    ndvi_daily_df = ndvi_daily_df.copy()
+    ndvi_daily_df["date"] = pd.to_datetime(ndvi_daily_df["date"], errors="coerce")
+    ndvi_daily_df = ndvi_daily_df.dropna(subset=["date"])
+    ndvi_series = ndvi_daily_df.set_index("date")["ndvi"].astype(float)
+    if hasattr(ndvi_series.index, "tz") and ndvi_series.index.tz is not None:
+        ndvi_series.index = ndvi_series.index.tz_convert("UTC").tz_localize(None)
+    ndvi_series = ndvi_series.sort_index()
+
+    events_by_key: Dict[str, List[Dict[str, Any]]] = {key: [] for key in category_levels}
+
+    def record_event(key: Optional[str], timestamp: Any, extra_parts: Optional[List[str]] = None) -> None:
+        if key not in events_by_key or timestamp is None:
+            return
+        ts = pd.to_datetime(timestamp, utc=True, errors="coerce")
+        if ts is pd.NaT:
+            return
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        else:
+            ts = ts.tz_convert("UTC")
+        ts_naive = ts.tz_localize(None)
+        ndvi_timestamp = ts_naive
+        ndvi_value: Optional[float] = None
+        if not ndvi_series.empty:
+            try:
+                ndvi_value = float(ndvi_series.loc[ts_naive])
+            except KeyError:
+                indexer = ndvi_series.index.get_indexer([ts_naive], method="nearest", tolerance=pd.Timedelta(days=3))
+                if indexer.size > 0 and indexer[0] != -1:
+                    ndvi_timestamp = ndvi_series.index[indexer[0]]
+                    ndvi_value = float(ndvi_series.iloc[indexer[0]])
+        bucket = events_by_key[key]
+        for item in bucket:
+            if item["timestamp"] == ndvi_timestamp:
+                if ndvi_value is not None:
+                    item["ndvi"] = ndvi_value
+                if extra_parts:
+                    item["hover_parts"].update(extra_parts)
+                return
+        hover_parts = set(extra_parts or [])
+        bucket.append({"timestamp": ndvi_timestamp, "ndvi": ndvi_value, "hover_parts": hover_parts})
+
+    for anomaly in anomalies_list:
+        key = anomaly.get("key")
+        details_parts = build_detail_parts(anomaly.get("details"))
+        record_event(key, anomaly.get("detectedAt"), details_parts)
+
+    volatility_chart = anomaly_charts.get("volatility")
+    if volatility_chart is not None and not volatility_chart.empty and "date" in volatility_chart.columns:
+        vol_copy = volatility_chart.copy()
+        vol_copy["date"] = pd.to_datetime(vol_copy["date"], errors="coerce")
+        if "threshold" in vol_copy.columns:
+            vol_copy = vol_copy[(vol_copy["rollingStd"].notna()) & (vol_copy["threshold"].notna()) & (vol_copy["rollingStd"] >= vol_copy["threshold"])]
+        else:
+            vol_copy = vol_copy.dropna(subset=["rollingStd"])
+        for _, row in vol_copy.iterrows():
+            hover_parts: List[str] = []
+            std_value = row.get("rollingStd")
+            if std_value is not None and not pd.isna(std_value):
+                hover_parts.append(f"std: {float(std_value):.3f}")
+            threshold_value = row.get("threshold")
+            if threshold_value is not None and not pd.isna(threshold_value):
+                hover_parts.append(f"threshold: {float(threshold_value):.3f}")
+            record_event("ndvi_volatility", row.get("date"), hover_parts)
+
+    senescence_chart = anomaly_charts.get("early_senescence")
+    if senescence_chart is not None and not senescence_chart.empty and "dropDate" in senescence_chart.columns:
+        sen_copy = senescence_chart.copy()
+        sen_copy["dropDate"] = pd.to_datetime(sen_copy["dropDate"], errors="coerce")
+        for _, row in sen_copy.iterrows():
+            if pd.isna(row.get("dropDate")):
+                continue
+            hover_parts: List[str] = []
+            year_value = row.get("year")
+            if year_value is not None and not pd.isna(year_value):
+                try:
+                    hover_parts.append(f"year: {int(year_value)}")
+                except Exception:
+                    pass
+            record_event("early_senescence", row.get("dropDate"), hover_parts)
+
+    greenup_chart = anomaly_charts.get("late_greenup")
+    if greenup_chart is not None and not greenup_chart.empty and "greenupDate" in greenup_chart.columns:
+        green_copy = greenup_chart.copy()
+        green_copy["greenupDate"] = pd.to_datetime(green_copy["greenupDate"], errors="coerce")
+        for _, row in green_copy.iterrows():
+            if pd.isna(row.get("greenupDate")):
+                continue
+            hover_parts: List[str] = []
+            year_value = row.get("year")
+            if year_value is not None and not pd.isna(year_value):
+                try:
+                    hover_parts.append(f"year: {int(year_value)}")
+                except Exception:
+                    pass
+            record_event("late_greenup", row.get("greenupDate"), hover_parts)
+
+    drop_chart = anomaly_charts.get("weatherless_drop")
+    if drop_chart is not None and not drop_chart.empty and "date" in drop_chart.columns:
+        drop_copy = drop_chart.copy()
+        drop_copy["date"] = pd.to_datetime(drop_copy["date"], errors="coerce")
+        if "flagged" in drop_copy.columns:
+            drop_copy = drop_copy[drop_copy["flagged"] == True]
+        drop_copy = drop_copy.dropna(subset=["date"])
+        for _, row in drop_copy.iterrows():
+            hover_parts: List[str] = []
+            delta_value = row.get("delta")
+            if delta_value is not None and not pd.isna(delta_value):
+                hover_parts.append(f"delta NDVI: {float(delta_value):.3f}")
+            record_event("weatherless_drop", row.get("date"), hover_parts)
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Scatter(
+            x=ndvi_series.index,
+            y=ndvi_series.values,
+            mode="lines",
+            name="NDVI",
+            connectgaps=True,
+            line=dict(color="#2ca02c", width=2),
+        ),
+        secondary_y=False,
+    )
+
+    category_order = sorted(category_levels.items(), key=lambda item: item[1], reverse=True)
+    markers_added = False
+
+    for key, level in category_order:
+        events = sorted(events_by_key.get(key, []), key=lambda item: item["timestamp"] if item["timestamp"] is not None else pd.Timestamp.min)
+        label = category_titles.get(key, key.replace("_", " ").title())
+        primary_x: List[pd.Timestamp] = []
+        primary_y: List[float] = []
+        primary_text: List[str] = []
+        secondary_x: List[pd.Timestamp] = []
+        secondary_y: List[float] = []
+        secondary_text: List[str] = []
+        for event in events:
+            ts = event.get("timestamp")
+            if ts is None:
+                continue
+            hover_parts = sorted(part for part in event.get("hover_parts", set()) if part)
+            hover_text = "<br>".join(hover_parts) if hover_parts else ""
+            secondary_x.append(ts)
+            secondary_y.append(level)
+            secondary_text.append(hover_text or " ")
+            ndvi_value = event.get("ndvi")
+            if ndvi_value is not None:
+                primary_x.append(ts)
+                primary_y.append(ndvi_value)
+                primary_text.append(hover_text or " ")
+        if secondary_x:
+            markers_added = True
+            fig.add_trace(
+                go.Scatter(
+                    x=secondary_x,
+                    y=secondary_y,
+                    mode="markers",
+                    name=label,
+                    legendgroup=key,
+                    marker=dict(
+                        color=color_map.get(key, "#1f77b4"),
+                        size=12,
+                        symbol=marker_symbols.get(key, "circle"),
+                        line=dict(color="#ffffff", width=1.5),
+                    ),
+                    text=secondary_text,
+                    hovertemplate=f"Category: {label}<br>Date: %{{x|%Y-%m-%d}}<br>%{{text}}<extra></extra>",
+                ),
+                secondary_y=True,
+            )
+        else:
+            fig.add_trace(
+                go.Scatter(
+                    x=[ndvi_series.index.min()] if not ndvi_series.empty else [pd.Timestamp.utcnow().normalize()],
+                    y=[level],
+                    mode="markers",
+                    name=label,
+                    legendgroup=key,
+                    marker=dict(color=color_map.get(key, "#1f77b4"), size=0.1, opacity=0.0),
+                    hoverinfo="skip",
+                    showlegend=True,
+                    visible="legendonly",
+                ),
+                secondary_y=True,
+            )
+        if primary_x:
+            fig.add_trace(
+                go.Scatter(
+                    x=primary_x,
+                    y=primary_y,
+                    mode="markers",
+                    name=f"{label} - NDVI",
+                    legendgroup=key,
+                    marker=dict(
+                        color=color_map.get(key, "#1f77b4"),
+                        size=9,
+                        symbol=marker_symbols.get(key, "circle"),
+                        line=dict(color="#ffffff", width=1),
+                    ),
+                    text=primary_text,
+                    hovertemplate=f"Category: {label}<br>Date: %{{x|%Y-%m-%d}}<br>NDVI: %{{y:.3f}}<br>%{{text}}<extra></extra>",
+                    showlegend=False,
+                ),
+                secondary_y=False,
+            )
+
+    tick_items = sorted(category_levels.items(), key=lambda item: item[1])
+    tickvals = [level for _, level in tick_items]
+    ticktext = [category_titles.get(key, key.replace("_", " ").title()) for key, level in tick_items]
+
+    fig.update_yaxes(title_text="NDVI", secondary_y=False)
+    fig.update_yaxes(
+        title_text="Anomaly category",
+        secondary_y=True,
+        tickmode="array",
+        tickvals=tickvals,
+        ticktext=ticktext,
+        range=[0, len(tickvals) + 1],
+        showgrid=False,
+        zeroline=False,
+    )
+
+    fig.update_layout(
+        height=420,
+        margin=dict(l=40, r=40, t=50, b=60),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+    if not markers_added:
+        st.caption("No anomaly markers flagged for the selected period.")# Main interface logic
 
 if search_button:
     if not earthdata_token:
@@ -1374,6 +1685,16 @@ if search_button:
                     weather_df = pd.DataFrame()
                     if center_latitude is not None and center_longitude is not None:
                         weather_df = fetch_weather_history(center_latitude, center_longitude, start_dt, end_dt)
+                    ndvi_df.loc[:, 'date'] = pd.to_datetime(ndvi_df['date'])
+                    anomalies_list: List[Dict[str, Any]] = []
+                    anomaly_charts: Dict[str, pd.DataFrame] = {}
+                    try:
+                        anomaly_input = ndvi_df[["date", "mean_NDVI"]].copy()
+                        anomalies_list, anomaly_charts = detect_anomalies(anomaly_input, weather_df)
+                    except Exception as exc:
+                        logger.exception("Anomaly detection failed for dashboard: %s", exc)
+                        anomalies_list = []
+                        anomaly_charts = {}
 
                     fig = make_subplots(specs=[[{"secondary_y": True}]])
                     fig.add_trace(
@@ -1469,6 +1790,7 @@ if search_button:
                     st.plotly_chart(fig, use_container_width=True)
                     if not weather_df.empty:
                         st.caption("Weather source: Open-Meteo archive (daily means).")
+                    render_anomaly_section(anomalies_list, anomaly_charts)
 
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
@@ -1827,3 +2149,8 @@ st.markdown("""
     <p><small>Data provided by NASA LP DAAC via the CMR-STAC API</small></p>
 </div>
 """, unsafe_allow_html=True)
+
+
+
+
+
