@@ -126,9 +126,23 @@ components:
           type: string
           format: date-time
           nullable: true
-        model:
+        yieldModel:
           type: string
-        confidence:
+        yieldConfidence:
+          type: number
+          format: float
+          nullable: true
+        ndviStartAt:
+          type: string
+          format: date-time
+          nullable: true
+        ndviEndAt:
+          type: string
+          format: date-time
+          nullable: true
+        ndviModel:
+          type: string
+        ndviConfidence:
           type: number
           format: float
           nullable: true

@@ -270,6 +270,10 @@ export default function FieldDetails() {
                   <dd>{field.forecast.yieldTph ?? "—"} t/ha</dd>
                 </div>
                 <div className="flex justify-between py-1">
+                  <dt>Yield model</dt>
+                  <dd>{field.forecast.yieldModel ?? "—"}</dd>
+                </div>
+                <div className="flex justify-between py-1">
                   <dt>NDVI peak</dt>
                   <dd>{field.forecast.ndviPeak ?? "—"}</dd>
                 </div>
@@ -280,14 +284,14 @@ export default function FieldDetails() {
                 <div className="flex justify-between py-1">
                   <dt>Confidence</dt>
                   <dd>
-                    {field.forecast.confidence != null
-                      ? Math.round(field.forecast.confidence * 100) + "%"
+                    {field.forecast.yieldConfidence != null
+                      ? Math.round(field.forecast.yieldConfidence * 100) + "%"
                       : "—"}
                   </dd>
                 </div>
                 <div className="flex justify-between py-1">
                   <dt>Model</dt>
-                  <dd>{field.forecast.model ?? "—"}</dd>
+                  <dd>{field.forecast.yieldModel ?? "—"}</dd>
                 </div>
               </dl>
             ) : (
