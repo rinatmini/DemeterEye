@@ -62,4 +62,5 @@ type reportDoc struct {
 	History      []map[string]any `bson:"history"`
 	Forecast     map[string]any   `bson:"forecast"`
 	ErrorMessage *string          `bson:"errorMessage"`
+	Anomalies    []map[string]any `bson:"anomalies"`
 }

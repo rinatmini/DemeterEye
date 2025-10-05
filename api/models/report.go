@@ -23,6 +23,7 @@ type Report struct {
 	GeoJSON      map[string]any  `bson:"geojson,omitempty"         json:"geojson,omitempty"` // processor may store object/string; we normalize to object
 	History      []ReportDaily   `bson:"history,omitempty"         json:"history,omitempty"`
 	Forecast     *ReportForecast `bson:"forecast,omitempty"        json:"forecast,omitempty"`
+	Anomalies    []Anomaly       `bson:"anomalies,omitempty"       json:"anomalies,omitempty"`
 	ErrorMessage string          `bson:"errorMessage,omitempty"    json:"errorMessage,omitempty"`
 }
 
@@ -52,4 +53,14 @@ type ReportForecast struct {
 	NDVIEndAt       *time.Time `bson:"ndviEndAt,omitempty" json:"ndviEndAt,omitempty"`
 	NDVIModel       string     `bson:"ndviModel,omitempty"      json:"ndviModel,omitempty"`
 	NDVIConfidence  *float64   `bson:"ndviConfidence,omitempty" json:"ndviConfidence,omitempty"`
+}
+
+// Anomaly mirrors anomaly results from chipnik_monitor/anomalies.py
+type Anomaly struct {
+	Key        string         `bson:"key"                   json:"key"`
+	Title      string         `bson:"title,omitempty"       json:"title,omitempty"`
+	Triggered  bool           `bson:"triggered"             json:"triggered"`
+	Severity   string         `bson:"severity,omitempty"     json:"severity,omitempty"`
+	DetectedAt *time.Time     `bson:"detectedAt,omitempty"   json:"detectedAt,omitempty"`
+	Details    map[string]any `bson:"details,omitempty"      json:"details,omitempty"`
 }
