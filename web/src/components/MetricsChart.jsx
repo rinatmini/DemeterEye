@@ -10,46 +10,67 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-// Unified chart: shows NDVI on left axis, weather metrics on right axis with toggles
+// NDVI left (0..1), other metrics right. Years — chips, series — toggles.
+// Forecast marked type=1 (dashed), actual — type=0 (solid).
 export default function MetricsChart({ history = [] }) {
   const COLORS = {
-    ndvi: "#10b981", // emerald
-    temperature_deg_c: "#f59e0b", // amber
-    wind_speed_mps: "#3b82f6", // blue
-    cloudcover_pct: "#6b7280", // gray
-    clarity_pct: "#eab308", // yellow
-    humidity_pct: "#06b6d4", // cyan
+    ndvi: "#10b981",
+    temperature_deg_c: "#f59e0b",
+    wind_speed_mps: "#3b82f6",
+    cloudcover_pct: "#6b7280",
+    clarity_pct: "#eab308",
+    humidity_pct: "#06b6d4",
   };
 
-  // Normalize and keep only rows with date
-  const chartData = useMemo(
-    () => (history || []).filter((d) => d?.date),
-    [history]
-  );
+  const base = useMemo(() => (history || []).filter((d) => d?.date), [history]);
 
-  // --- Year chips ---
-  // Collect unique years present in the data, sort desc (2025, 2024, ...)
+  // ---- Years ----
   const years = useMemo(() => {
-    const set = new Set();
-    for (const d of chartData) {
+    const s = new Set();
+    for (const d of base) {
       const y = getYear(d.date);
-      if (Number.isFinite(y)) set.add(y);
+      if (Number.isFinite(y)) s.add(y);
     }
-    return Array.from(set).sort((a, b) => b - a);
-  }, [chartData]);
+    return Array.from(s).sort((a, b) => b - a);
+  }, [base]);
 
-  // Default to the latest year if available, else "All"
-  const [year, setYear] = useState(
-    years.length ? years[0] : "All"
+  const [year, setYear] = useState(years.length ? years[0] : "All");
+  const dataByYear = useMemo(
+    () =>
+      year === "All" ? base : base.filter((d) => getYear(d.date) === year),
+    [base, year]
   );
 
-  // Data filtered by selected year (or all)
-  const dataByYear = useMemo(() => {
-    if (year === "All") return chartData;
-    return chartData.filter((d) => getYear(d.date) === year);
-  }, [chartData, year]);
+  // ---- Split into hist (solid) / fc (dashed) by `type` ----
+  const KEYS = [
+    "ndvi",
+    "temperature_deg_c",
+    "wind_speed_mps",
+    "cloudcover_pct",
+    "clarity_pct",
+    "humidity_pct",
+  ];
+  const pointType = (row) => {
+    console.log('row', row);
+    if (row?.type === 0 || row?.type === 1) return row.type; // new
+    if (row?.isForecast ?? row?.isForcast) return 1; // legacy support
+    return 0;
+  };
 
-  // --- Series toggles ---
+  const dataSplit = useMemo(() => {
+    return (dataByYear || []).map((row) => {
+      const t = pointType(row);
+      const out = { date: row.date };
+      for (const k of KEYS) {
+        const v = row[k];
+        out[`${k}__hist`] = t === 0 ? v ?? null : null;
+        out[`${k}__fc`] = t === 1 ? v ?? null : null;
+      }
+      return out;
+    });
+  }, [dataByYear]);
+
+  // ---- Toggles ----
   const [show, setShow] = useState({
     ndvi: true,
     temperature_deg_c: true,
@@ -60,7 +81,6 @@ export default function MetricsChart({ history = [] }) {
   });
 
   const yLeftLabel = show.ndvi ? "NDVI" : "";
-
   const rightKeys = Object.entries(show)
     .filter(([k, on]) => on && k !== "ndvi")
     .map(([k]) => k);
@@ -85,14 +105,13 @@ export default function MetricsChart({ history = [] }) {
 
   return (
     <div className="w-full">
-      {/* Year chips row */}
+      {/* Year chips */}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         {years.map((y) => (
           <Chip key={y} active={year === y} onClick={() => setYear(y)}>
             {y}
           </Chip>
         ))}
-        {/* Optional "All" chip when multiple years exist */}
         {years.length > 1 && (
           <Chip active={year === "All"} onClick={() => setYear("All")}>
             All
@@ -131,7 +150,9 @@ export default function MetricsChart({ history = [] }) {
         <Toggle
           label="Sun (%)"
           on={show.clarity_pct}
-          onClick={() => setShow((s) => ({ ...s, clarity_pct: !s.clarity_pct }))}
+          onClick={() =>
+            setShow((s) => ({ ...s, clarity_pct: !s.clarity_pct }))
+          }
         />
         <Toggle
           label="Humidity (%)"
@@ -146,7 +167,7 @@ export default function MetricsChart({ history = [] }) {
       <div className="h-[340px] w-full">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart
-            data={dataByYear}
+            data={dataSplit}
             margin={{ top: 10, right: 20, left: 0, bottom: 10 }}
           >
             <CartesianGrid strokeDasharray="3 3" />
@@ -160,7 +181,6 @@ export default function MetricsChart({ history = [] }) {
               yAxisId="left"
               tick={{ fontSize: 12 }}
               domain={[0, 1]}
-              allowDecimals
               tickFormatter={fmtNDVI}
               label={{ value: yLeftLabel, angle: -90, position: "insideLeft" }}
             />
@@ -169,84 +189,172 @@ export default function MetricsChart({ history = [] }) {
               orientation="right"
               tick={{ fontSize: 12 }}
               domain={rightDomain}
-              allowDecimals
               tickFormatter={fmtNum2}
             />
             <Tooltip content={<HistoryTooltip />} />
             <Legend />
-            {/* Brush removed */}
 
+            {/* For each metric: solid hist + dashed forecast (hidden in legend) */}
             {show.ndvi && (
-              <Line
-                type="monotone"
-                dataKey="ndvi"
-                yAxisId="left"
-                name="NDVI"
-                dot={false}
-                strokeWidth={2}
-                stroke={COLORS.ndvi}
-                connectNulls
-              />
+              <>
+                <Line
+                  type="monotone"
+                  dataKey="ndvi__hist"
+                  yAxisId="left"
+                  name="NDVI"
+                  dot={false}
+                  strokeWidth={2}
+                  stroke={COLORS.ndvi}
+                  connectNulls={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="ndvi__fc"
+                  yAxisId="left"
+                  name="NDVI (forecast)"
+                  dot={false}
+                  strokeWidth={2}
+                  stroke={COLORS.ndvi}
+                  strokeDasharray="6 4"
+                  connectNulls={false}
+                  legendType="none"
+                />
+              </>
             )}
+
             {show.temperature_deg_c && (
-              <Line
-                type="monotone"
-                dataKey="temperature_deg_c"
-                yAxisId="right"
-                name="Temp (°C)"
-                dot={false}
-                strokeWidth={1.5}
-                stroke={COLORS.temperature_deg_c}
-                connectNulls
-              />
+              <>
+                <Line
+                  type="monotone"
+                  dataKey="temperature_deg_c__hist"
+                  yAxisId="right"
+                  name="Temp (°C)"
+                  dot={false}
+                  strokeWidth={1.5}
+                  stroke={COLORS.temperature_deg_c}
+                  connectNulls={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="temperature_deg_c__fc"
+                  yAxisId="right"
+                  name="Temp (°C) (forecast)"
+                  dot={false}
+                  strokeWidth={1.5}
+                  stroke={COLORS.temperature_deg_c}
+                  strokeDasharray="6 4"
+                  connectNulls={false}
+                  hide
+                />
+              </>
             )}
+
             {show.wind_speed_mps && (
-              <Line
-                type="monotone"
-                dataKey="wind_speed_mps"
-                yAxisId="right"
-                name="Wind (m/s)"
-                dot={false}
-                strokeWidth={1.5}
-                stroke={COLORS.wind_speed_mps}
-                connectNulls
-              />
+              <>
+                <Line
+                  type="monotone"
+                  dataKey="wind_speed_mps__hist"
+                  yAxisId="right"
+                  name="Wind (m/s)"
+                  dot={false}
+                  strokeWidth={1.5}
+                  stroke={COLORS.wind_speed_mps}
+                  connectNulls={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="wind_speed_mps__fc"
+                  yAxisId="right"
+                  name="Wind (m/s) (forecast)"
+                  dot={false}
+                  strokeWidth={1.5}
+                  stroke={COLORS.wind_speed_mps}
+                  strokeDasharray="6 4"
+                  connectNulls={false}
+                  hide
+                />
+              </>
             )}
+
             {show.cloudcover_pct && (
-              <Line
-                type="monotone"
-                dataKey="cloudcover_pct"
-                yAxisId="right"
-                name="Cloud (%)"
-                dot={false}
-                strokeWidth={1.5}
-                stroke={COLORS.cloudcover_pct}
-                connectNulls
-              />
+              <>
+                <Line
+                  type="monotone"
+                  dataKey="cloudcover_pct__hist"
+                  yAxisId="right"
+                  name="Cloud (%)"
+                  dot={false}
+                  strokeWidth={1.5}
+                  stroke={COLORS.cloudcover_pct}
+                  connectNulls={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="cloudcover_pct__fc"
+                  yAxisId="right"
+                  name="Cloud (%) (forecast)"
+                  dot={false}
+                  strokeWidth={1.5}
+                  stroke={COLORS.cloudcover_pct}
+                  strokeDasharray="6 4"
+                  connectNulls={false}
+                  hide
+                />
+              </>
             )}
+
             {show.clarity_pct && (
-              <Line
-                type="monotone"
-                dataKey="clarity_pct"
-                yAxisId="right"
-                name="Sun (%)"
-                dot={false}
-                strokeWidth={1.5}
-                stroke={COLORS.clarity_pct}
-                connectNulls
-              />
+              <>
+                <Line
+                  type="monotone"
+                  dataKey="clarity_pct__hist"
+                  yAxisId="right"
+                  name="Sun (%)"
+                  dot={false}
+                  strokeWidth={1.5}
+                  stroke={COLORS.clarity_pct}
+                  connectNulls={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="clarity_pct__fc"
+                  yAxisId="right"
+                  name="Sun (%) (forecast)"
+                  dot={false}
+                  strokeWidth={1.5}
+                  stroke={COLORS.clarity_pct}
+                  strokeDasharray="6 4"
+                  connectNulls={false}
+                  hide
+                />
+              </>
             )}
+
             {show.humidity_pct && (
-              <Line
-                type="monotone"
-                dataKey="humidity_pct"
-                yAxisId="right"
-                name="Humidity (%)"
-                dot={false}
-                strokeWidth={1.5}
-                stroke={COLORS.humidity_pct}
-                connectNulls
-              />
+              <>
+                <Line
+                  type="monotone"
+                  dataKey="humidity_pct__hist"
+                  yAxisId="right"
+                  name="Humidity (%)"
+                  dot={false}
+                  strokeWidth={1.5}
+                  stroke={COLORS.humidity_pct}
+                  connectNulls={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="humidity_pct__fc"
+                  yAxisId="right"
+                  name="Humidity (%) (forecast)"
+                  dot={false}
+                  strokeWidth={1.5}
+                  stroke={COLORS.humidity_pct}
+                  strokeDasharray="6 4"
+                  connectNulls={false}
+                  hide
+                />
+              </>
             )}
           </LineChart>
         </ResponsiveContainer>
@@ -255,6 +363,7 @@ export default function MetricsChart({ history = [] }) {
   );
 }
 
+/* UI */
 function Chip({ active, onClick, children }) {
   return (
     <button
@@ -270,7 +379,6 @@ function Chip({ active, onClick, children }) {
     </button>
   );
 }
-
 function Toggle({ label, on, onClick }) {
   return (
     <button
@@ -286,8 +394,7 @@ function Toggle({ label, on, onClick }) {
   );
 }
 
-// ===== helpers =====
-
+/* helpers */
 function getYear(v) {
   try {
     const d = typeof v === "string" ? new Date(v) : v;
@@ -296,30 +403,29 @@ function getYear(v) {
     return NaN;
   }
 }
-
 const nf2 = new Intl.NumberFormat(undefined, {
   minimumFractionDigits: 0,
   maximumFractionDigits: 2,
 });
 function fmtNDVI(v) {
   if (v == null || Number.isNaN(v)) return "";
-  // NDVI in [0,1] — show 2 digits
-  return Number(v).toFixed(2).replace(/\.?0+$/,"");
+  return Number(v)
+    .toFixed(2)
+    .replace(/\.?0+$/, "");
 }
 function fmtNum2(v) {
   if (v == null || Number.isNaN(v)) return "";
   return nf2.format(v);
 }
-
 function round(x, p = 2) {
   const m = Math.pow(10, p);
   return Math.round((x + Number.EPSILON) * m) / m;
 }
-
 function formatDate(v) {
   try {
     const d = typeof v === "string" ? new Date(v) : v;
-    if (!(d instanceof Date) || Number.isNaN(d.getTime())) return String(v ?? "");
+    if (!(d instanceof Date) || Number.isNaN(d.getTime()))
+      return String(v ?? "");
     return d.toISOString().slice(0, 10);
   } catch {
     return String(v ?? "");
@@ -328,33 +434,28 @@ function formatDate(v) {
 
 function HistoryTooltip({ active, payload, label }) {
   if (!active || !payload || payload.length === 0) return null;
-  const map = Object.fromEntries(payload.map((p) => [p.dataKey, p.value]));
+  const pick = (base) => {
+    const h = payload.find((p) => p.dataKey === `${base}__hist`);
+    const f = payload.find((p) => p.dataKey === `${base}__fc`);
+    return h?.value ?? f?.value;
+  };
+  const rows = [
+    ["NDVI", pick("ndvi"), (v) => round(v)],
+    ["Temp", pick("temperature_deg_c"), (v) => `${round(v)} °C`],
+    ["Wind", pick("wind_speed_mps"), (v) => `${round(v)} m/s`],
+    ["Cloud", pick("cloudcover_pct"), (v) => `${round(v)} %`],
+    ["Sun", pick("clarity_pct"), (v) => `${round(v)} %`],
+    ["Humidity", pick("humidity_pct"), (v) => `${round(v)} %`],
+  ];
   return (
     <div className="rounded-md border bg-white/95 p-2 text-xs shadow">
       <div className="font-medium mb-1">{formatDate(label)}</div>
-      {map.ndvi !== undefined && <Row k="NDVI" v={round(map.ndvi)} />}
-      {map.temperature_deg_c !== undefined && (
-        <Row k="Temp" v={`${round(map.temperature_deg_c)} °C`} />
-      )}
-      {map.wind_speed_mps !== undefined && (
-        <Row k="Wind" v={`${round(map.wind_speed_mps)} m/s`} />
-      )}
-      {map.cloudcover_pct !== undefined && (
-        <Row k="Cloud" v={`${round(map.cloudcover_pct)} %`} />
-      )}
-      {map.clarity_pct !== undefined && (
-        <Row k="Sun" v={`${round(map.clarity_pct)} %`} />
-      )}
-      {map.humidity_pct !== undefined && (
-        <Row k="Humidity" v={`${round(map.humidity_pct)} %`} />
-      )}
-      {map.cloud_cover !== undefined && (
-        <Row k="HLS Cloud" v={`${round(map.cloud_cover)} %`} />
+      {rows.map(([k, v, fmt]) =>
+        v == null ? null : <Row key={k} k={k} v={fmt(v)} />
       )}
     </div>
   );
 }
-
 function Row({ k, v }) {
   return (
     <div className="flex items-center justify-between gap-6">
