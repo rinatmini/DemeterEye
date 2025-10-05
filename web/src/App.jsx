@@ -1,10 +1,16 @@
-import React from "react";
-import { Routes, Route, Navigate, useLocation, Link, useNavigate } from "react-router-dom";
+import {
+  Routes,
+  Route,
+  Navigate,
+  useLocation,
+  Link,
+  useNavigate,
+} from "react-router-dom";
 import AuthScreen from "./views/AuthScreen.jsx";
 import FieldsList from "./views/FieldsList.jsx";
 import CreateField from "./views/CreateField.jsx";
 import FieldDetails from "./views/FieldDetails.jsx";
-import { LogOut, Leaf } from "lucide-react";
+import { LogOut } from "lucide-react";
 
 function RequireAuth({ children }) {
   const token = localStorage.getItem("token");
@@ -22,7 +28,7 @@ function Shell({ children }) {
       <header className="sticky top-0 z-10 bg-white border-b">
         <div className="mx-auto max-w-6xl px-4 h-14 flex items-center justify-between">
           <Link to="/" className="inline-flex items-center gap-2 font-semibold">
-            <Leaf className="h-4 w-4 text-emerald-600" />
+            <img src="/public/favicon.svg" className="h-16 w-16" />
             DemeterEye
           </Link>
           {token && (
@@ -49,7 +55,10 @@ export default function App() {
   return (
     <Shell>
       <Routes>
-        <Route path="/" element={<Navigate to={token ? "/fields" : "/login"} replace />} />
+        <Route
+          path="/"
+          element={<Navigate to={token ? "/fields" : "/login"} replace />}
+        />
 
         <Route path="/login" element={<AuthScreen />} />
 
@@ -78,7 +87,10 @@ export default function App() {
           }
         />
 
-        <Route path="*" element={<div className="p-6 text-gray-600">Not found</div>} />
+        <Route
+          path="*"
+          element={<div className="p-6 text-gray-600">Not found</div>}
+        />
       </Routes>
     </Shell>
   );

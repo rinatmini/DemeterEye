@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 
 export default function SimpleClickMap({ coords, setCoords }) {
   // Minimal SVG pad to capture polygon points without external map deps.

@@ -1,5 +1,5 @@
 // src/components/FieldDrawMap.jsx
-import React, { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import {
   MapContainer,
   TileLayer,
@@ -13,14 +13,14 @@ import { EditControl } from "react-leaflet-draw";
 import L from "leaflet";
 
 export default function FieldDrawMap({
-  value,                       // GeoJSON geometry: Polygon | MultiPolygon
+  value, // GeoJSON geometry: Polygon | MultiPolygon
   onChange,
   initialCenter = [47.4554598, -122.2208032],
   initialZoom = 14,
   rememberView = true,
   fitToGeometry = true,
   className = "w-full h-[70vh] rounded-xl border",
-  mode = "view",               // "view" | "edit" | "draw"
+  mode = "view", // "view" | "edit" | "draw"
 }) {
   const fgRef = useRef(null);
   const mapRef = useRef(null);
@@ -98,7 +98,11 @@ export default function FieldDrawMap({
   // Toolbar options by mode
   const editControlExtra =
     mode === "view"
-      ? { edit: false, remove: false, selectedPathOptions: { maintainColor: true } }
+      ? {
+          edit: false,
+          remove: false,
+          selectedPathOptions: { maintainColor: true },
+        }
       : { selectedPathOptions: { maintainColor: true } };
 
   const drawOptions =
