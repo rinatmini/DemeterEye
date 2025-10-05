@@ -1,7 +1,7 @@
 // src/views/FieldDetails.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Loader2, Map as MapIcon, Pencil, Save, X, Leaf } from "lucide-react";
+import { Loader2, Map as MapIcon, Pencil, Save, X } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import StatusPill from "../components/StatusPill.jsx";
 import MetricsChart from "../components/MetricsChart.jsx";
@@ -173,7 +173,7 @@ export default function FieldDetails() {
           <StatusPill status={field.status} />
         </div>
         <div className="mt-1 text-sm text-gray-600 flex items-center gap-3">
-          <Leaf className="h-4 w-4 text-emerald-600" />
+          <img src="/public/favicon.svg" className="h-16 w-16" />
           <span>{field?.meta?.crop || "—"}</span>
           <span className="text-gray-300">•</span>
           <span title="Area">{field?.meta?.areaHa ?? "—"} ha</span>

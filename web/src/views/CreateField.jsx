@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import area from "@turf/area";
 import { useNavigate } from "react-router-dom";
 import {
@@ -18,16 +18,10 @@ export default function CreateField() {
   const [areaHa, setArea] = useState("");
   const [autoAreaHa, setAutoAreaHa] = useState();
   const [autoCalcArea, setAutoCalcArea] = useState(true);
-  const [overrideArea, setOverrideArea] = useState(false);
-  const [photo, setPhoto] = useState("");
+  const [_overrideArea, setOverrideArea] = useState(false);
+  const [photo, _setPhoto] = useState("");
   const [crop, setCrop] = useState("");
-  const CROP_OPTIONS = [
-    "Potato",
-    "Soybean",
-    "Sugar Beet",
-    "Tomato",
-    "Wheat",
-  ];
+  const CROP_OPTIONS = ["Potato", "Soybean", "Sugar Beet", "Tomato", "Wheat"];
   const [notes, setNotes] = useState("");
   const [geometry, setGeometry] = useState(null);
   const [yields, setYields] = useState([
@@ -73,14 +67,16 @@ export default function CreateField() {
     });
   };
   const addYieldRow = () => {
-
     if (yields.length === 0) {
-      setYields((p) => [...p, { year: new Date().getFullYear(), valueTph: "", unit: "t/ha" }]);
+      setYields((p) => [
+        ...p,
+        { year: new Date().getFullYear(), valueTph: "", unit: "t/ha" },
+      ]);
       return;
     }
     const prevYear = yields[yields.length - 1].year - 1;
     setYields((p) => [...p, { year: prevYear, valueTph: "", unit: "t/ha" }]);
-  }
+  };
   const removeYieldRow = (idx) =>
     setYields((p) => p.filter((_, i) => i !== idx));
 
@@ -131,7 +127,6 @@ export default function CreateField() {
     <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
       {/* LEFT: Map + tips */}
       <div className="flex flex-col gap-4">
-
         <div className="rounded-2xl border bg-white p-3">
           <div className="flex items-center justify-between mb-2">
             <h3 className="font-semibold flex items-center gap-2">

@@ -1,5 +1,3 @@
-import React from "react";
-
 /** Small colored pill for field status: processing | ready | error */
 export default function StatusPill({ status }) {
   const map = {
@@ -16,7 +14,10 @@ export default function StatusPill({ status }) {
       cls: "bg-rose-100 text-rose-700 ring-rose-200",
     },
   };
-  const m = map[status] || { label: "Unknown", cls: "bg-gray-100 text-gray-700 ring-gray-200" };
+  const m = map[status] || {
+    label: "Unknown",
+    cls: "bg-gray-100 text-gray-700 ring-gray-200",
+  };
 
   return (
     <span

@@ -1,5 +1,5 @@
 // src/views/FieldList.jsx
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import StatusPill from "../components/StatusPill.jsx";

@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Leaf, Loader2 } from "lucide-react";
+import { useState } from "react";
+import { Loader2 } from "lucide-react";
 import { apiFetch } from "../lib/api.js";
 import { useLocation, useNavigate } from "react-router-dom";
 
@@ -48,7 +48,7 @@ export default function AuthScreen() {
     <div className="min-h-[70vh] grid place-items-center p-4">
       <div className="w-full max-w-md rounded-2xl border bg-white p-6 shadow-sm">
         <div className="flex items-center gap-2 mb-4">
-          <Leaf className="h-5 w-5 text-emerald-600" />
+          <img src="/public/favicon.svg" className="h-16 w-16" />
           <h1 className="text-xl font-semibold">DemeterEye</h1>
         </div>
         <p className="text-gray-600 mb-4">
