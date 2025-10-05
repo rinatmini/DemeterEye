@@ -7,6 +7,7 @@ import StatusPill from "../components/StatusPill.jsx";
 import MetricsChart from "../components/MetricsChart.jsx";
 import FieldDrawMap from "../components/FieldDrawMap.jsx";
 import fieldSvg from "../assets/field.svg";
+import { cropIcons } from "../constants/cropIcons.js";
 
 export default function FieldDetails() {
   const { id } = useParams();
@@ -28,6 +29,8 @@ export default function FieldDetails() {
   const [err, setErr] = useState("");
 
   const token = localStorage.getItem("token");
+
+  const crop = field?.meta?.crop;
 
   const load = async () => {
     setLoading(true);
@@ -173,7 +176,10 @@ export default function FieldDetails() {
           <StatusPill status={field.status} />
         </div>
         <div className="mt-1 text-sm text-gray-600 flex items-center gap-3">
-          <img src="/favicon.svg" className="h-16 w-16" />
+          <img
+            src={cropIcons[crop.toLowerCase()] || "/favicon.svg"}
+            className="h-10 w-10"
+          />
           <span>{field?.meta?.crop || "—"}</span>
           <span className="text-gray-300">•</span>
           <span title="Area">{field?.meta?.areaHa ?? "—"} ha</span>
