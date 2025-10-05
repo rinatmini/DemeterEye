@@ -173,7 +173,7 @@ export default function FieldDetails() {
           <StatusPill status={field.status} />
         </div>
         <div className="mt-1 text-sm text-gray-600 flex items-center gap-3">
-          <img src="/public/favicon.svg" className="h-16 w-16" />
+          <img src="/favicon.svg" className="h-16 w-16" />
           <span>{field?.meta?.crop || "—"}</span>
           <span className="text-gray-300">•</span>
           <span title="Area">{field?.meta?.areaHa ?? "—"} ha</span>
