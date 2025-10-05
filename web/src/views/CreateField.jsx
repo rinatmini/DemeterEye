@@ -9,7 +9,8 @@ import { Loader2, Map as MapIcon, Plus, Trash2 } from "lucide-react";
 import { apiFetch } from "../lib/api.js";
 import FieldDrawMap from "../components/FieldDrawMap.jsx";
 
-const DEFAULT_CENTER = [47.4554598, -122.2208032];
+// const DEFAULT_CENTER = [47.4554598, -122.2208032];
+const DEFAULT_CENTER = [42.6038936, -113.7710083];
 const DEFAULT_ZOOM = 14;
 
 export default function CreateField() {
