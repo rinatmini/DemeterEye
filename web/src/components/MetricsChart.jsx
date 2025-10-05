@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import {
   LineChart,
   Line,
@@ -34,7 +34,15 @@ export default function MetricsChart({ history = [] }) {
     return Array.from(s).sort((a, b) => b - a);
   }, [base]);
 
-  const [year, setYear] = useState(years.length ? years[0] : "All");
+  const [year, setYear] = useState("All");
+  useEffect(() => {
+    if (!years || years.length === 0) return;
+    const currentYear = new Date().getFullYear();
+    setYear((prev) => {
+      if (prev !== "All") return prev;
+      return years.includes(currentYear) ? currentYear : years[0];
+    });
+  }, [years]);
   const dataByYear = useMemo(
     () =>
       year === "All" ? base : base.filter((d) => getYear(d.date) === year),
@@ -51,7 +59,6 @@ export default function MetricsChart({ history = [] }) {
     "humidity_pct",
   ];
   const pointType = (row) => {
-    console.log('row', row);
     if (row?.type === 0 || row?.type === 1) return row.type; // new
     if (row?.isForecast ?? row?.isForcast) return 1; // legacy support
     return 0;
@@ -245,6 +252,7 @@ export default function MetricsChart({ history = [] }) {
                   strokeDasharray="6 4"
                   connectNulls={false}
                   hide
+                  legendType="none"
                 />
               </>
             )}
@@ -272,6 +280,7 @@ export default function MetricsChart({ history = [] }) {
                   strokeDasharray="6 4"
                   connectNulls={false}
                   hide
+                  legendType="none"
                 />
               </>
             )}
@@ -299,6 +308,7 @@ export default function MetricsChart({ history = [] }) {
                   strokeDasharray="6 4"
                   connectNulls={false}
                   hide
+                  legendType="none"
                 />
               </>
             )}
@@ -326,6 +336,7 @@ export default function MetricsChart({ history = [] }) {
                   strokeDasharray="6 4"
                   connectNulls={false}
                   hide
+                  legendType="none"
                 />
               </>
             )}
@@ -353,6 +364,7 @@ export default function MetricsChart({ history = [] }) {
                   strokeDasharray="6 4"
                   connectNulls={false}
                   hide
+                  legendType="none"
                 />
               </>
             )}
