@@ -4,9 +4,10 @@ import json
 import os
 import calendar
 import threading
+import concurrent.futures
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 from uuid import uuid4
 
 import pandas as pd
@@ -757,12 +758,59 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
     history: List[Dict[str, Any]] = []
     report_records: List[Dict[str, Any]] = []
 
-    for i, row in enumerate(rows):
-        report = monitor.compute_index_for_row(row, index_types=index_types, bbox=bbox, token=token)
-        if not report:
-            continue
-        report_records.append(report)
+    enumerated_rows = list(enumerate(rows))
+    default_worker_cap = 1 if getattr(monitor, "_CLOUD_RUN_SERVICE", None) else 8
+    worker_cap_raw = os.getenv("WORKER_CAP", "").strip()
+    if worker_cap_raw:
+        try:
+            worker_cap = max(1, int(worker_cap_raw))
+            monitor.logger.info("WORKER_CAP=%s", worker_cap_raw)
+        except ValueError:
+            monitor.logger.warning("Invalid WORKER_CAP=%s; falling back to default", worker_cap_raw)
+            worker_cap = default_worker_cap
+    else:
+        worker_cap = default_worker_cap
+    max_workers = max(1, min(worker_cap, len(enumerated_rows)))
 
+    results_pairs: List[Tuple[int, Any, Dict[str, Any]]] = []
+
+    def _compute_row(item: Tuple[int, Any]) -> Optional[Dict[str, Any]]:
+        idx, row = item
+        return monitor.compute_index_for_row(row, index_types=index_types, bbox=bbox, token=token)
+
+    if max_workers > 1:
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {executor.submit(_compute_row, item): item for item in enumerated_rows}
+                for future in concurrent.futures.as_completed(future_map):
+                    idx, row = future_map[future]
+                    try:
+                        report = future.result()
+                    except Exception:
+                        monitor.logger.exception("NDVI worker failed for row %s", idx)
+                        continue
+                    if report:
+                        report_records.append(report)
+                        results_pairs.append((idx, row, report))
+        except Exception:
+            monitor.logger.exception("Parallel NDVI computation failed; falling back to sequential execution")
+            results_pairs.clear()
+
+    if not results_pairs:
+        for idx, row in enumerated_rows:
+            try:
+                report = monitor.compute_index_for_row(row, index_types=index_types, bbox=bbox, token=token)
+            except Exception:
+                monitor.logger.exception("Sequential NDVI computation failed for row %s", idx)
+                continue
+            if not report:
+                continue
+            report_records.append(report)
+            results_pairs.append((idx, row, report))
+
+    results_pairs.sort(key=lambda item: item[0])
+
+    for idx, row, report in results_pairs:
         date_value = report.get("date")
         report_dt: Optional[datetime] = None
         if isinstance(date_value, pd.Timestamp):
@@ -796,15 +844,14 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
             "clarity_pct": weather["clarity_pct"] if weather else None,
             "type": 0,  # 0 = historic data, 1 = ML predicted data
         }
-        
+
         history.append(historical_entry)
-        
+
         # For the last row, append a copy with type 1
-        if i == len(rows) - 1:
+        if idx == len(rows) - 1:
             transition_entry = historical_entry.copy()
             transition_entry["type"] = 1
             history.append(transition_entry)
-
     history.sort(key=lambda item: item["date"])
 
     # Try ML prediction first, fall back to heuristic method
