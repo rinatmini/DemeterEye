@@ -1,12 +1,13 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
 import calendar
 import threading
+import concurrent.futures
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 from uuid import uuid4
 
 import pandas as pd
@@ -21,6 +22,10 @@ from pymongo import MongoClient  # type: ignore
 from pymongo.collection import Collection  # type: ignore
 
 import chipnik_monitor as monitor
+try:
+    from chipnik_monitor.anomalies import detect_anomalies
+except ModuleNotFoundError:
+    from anomalies import detect_anomalies
 
 # ML model imports
 import numpy as np
@@ -472,7 +477,8 @@ def _predict_ndvi_with_ml(history_data: List[Dict[str, Any]], weather_df: pd.Dat
 def _persist_report_state(operation_id: str, geojson_payload: Union[str, Dict[str, Any]], yield_type: str,
                           status: str, field_id: Optional[str] = None,
                           history: Optional[List[Dict[str, Any]]] = None,
-                          forecast: Optional[Dict[str, Any]] = None, error_message: Optional[str] = None) -> None:
+                          forecast: Optional[Dict[str, Any]] = None,
+                          anomalies: Optional[List[Dict[str, Any]]] = None, error_message: Optional[str] = None) -> None:
     collection = _get_reports_collection()
 
     state = _get_operation(operation_id)
@@ -490,6 +496,7 @@ def _persist_report_state(operation_id: str, geojson_payload: Union[str, Dict[st
         "geojson": _serialisable_geojson(geojson_payload),
         "history": history,
         "forecast": forecast,
+        "anomalies": anomalies,
         "errorMessage": error_message,
     }
 
@@ -651,6 +658,7 @@ def _get_persisted_operation(op_id: str) -> Optional[Dict[str, Any]]:
 
     history = document.get("history")
     forecast = document.get("forecast")
+    anomalies = document.get("anomalies")
 
     state: Dict[str, Any] = {
         "status": document.get("status"),
@@ -662,10 +670,11 @@ def _get_persisted_operation(op_id: str) -> Optional[Dict[str, Any]]:
         "error": document.get("errorMessage"),
     }
 
-    if history is not None or forecast is not None:
+    if history is not None or forecast is not None or anomalies is not None:
         state["result"] = {
             "history": history,
             "forecast": forecast,
+            "anomalies": anomalies,
         }
 
     return state
@@ -688,7 +697,7 @@ def _run_report_job(op_id: str, geojson_payload: Union[str, Dict[str, Any]], yie
         return
     _update_operation(op_id, status="ready", result=report, error=None)
     try:
-        _persist_report_state(op_id, geojson_payload, yield_profile.get("name", ""), status="ready", field_id=field_id, history=report.get("history"), forecast=report.get("forecast"))
+        _persist_report_state(op_id, geojson_payload, yield_profile.get("name", ""), status="ready", field_id=field_id, history=report.get("history"), forecast=report.get("forecast"), anomalies=report.get("anomalies"))
     except Exception:
         monitor.logger.exception("Failed to persist report state for %s", op_id)
 
@@ -749,12 +758,59 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
     history: List[Dict[str, Any]] = []
     report_records: List[Dict[str, Any]] = []
 
-    for i, row in enumerate(rows):
-        report = monitor.compute_index_for_row(row, index_types=index_types, bbox=bbox, token=token)
-        if not report:
-            continue
-        report_records.append(report)
+    enumerated_rows = list(enumerate(rows))
+    default_worker_cap = 1 if getattr(monitor, "_CLOUD_RUN_SERVICE", None) else 8
+    worker_cap_raw = os.getenv("WORKER_CAP", "").strip()
+    if worker_cap_raw:
+        try:
+            worker_cap = max(1, int(worker_cap_raw))
+            monitor.logger.info("WORKER_CAP=%s", worker_cap_raw)
+        except ValueError:
+            monitor.logger.warning("Invalid WORKER_CAP=%s; falling back to default", worker_cap_raw)
+            worker_cap = default_worker_cap
+    else:
+        worker_cap = default_worker_cap
+    max_workers = max(1, min(worker_cap, len(enumerated_rows)))
 
+    results_pairs: List[Tuple[int, Any, Dict[str, Any]]] = []
+
+    def _compute_row(item: Tuple[int, Any]) -> Optional[Dict[str, Any]]:
+        idx, row = item
+        return monitor.compute_index_for_row(row, index_types=index_types, bbox=bbox, token=token)
+
+    if max_workers > 1:
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {executor.submit(_compute_row, item): item for item in enumerated_rows}
+                for future in concurrent.futures.as_completed(future_map):
+                    idx, row = future_map[future]
+                    try:
+                        report = future.result()
+                    except Exception:
+                        monitor.logger.exception("NDVI worker failed for row %s", idx)
+                        continue
+                    if report:
+                        report_records.append(report)
+                        results_pairs.append((idx, row, report))
+        except Exception:
+            monitor.logger.exception("Parallel NDVI computation failed; falling back to sequential execution")
+            results_pairs.clear()
+
+    if not results_pairs:
+        for idx, row in enumerated_rows:
+            try:
+                report = monitor.compute_index_for_row(row, index_types=index_types, bbox=bbox, token=token)
+            except Exception:
+                monitor.logger.exception("Sequential NDVI computation failed for row %s", idx)
+                continue
+            if not report:
+                continue
+            report_records.append(report)
+            results_pairs.append((idx, row, report))
+
+    results_pairs.sort(key=lambda item: item[0])
+
+    for idx, row, report in results_pairs:
         date_value = report.get("date")
         report_dt: Optional[datetime] = None
         if isinstance(date_value, pd.Timestamp):
@@ -788,15 +844,14 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
             "clarity_pct": weather["clarity_pct"] if weather else None,
             "type": 0,  # 0 = historic data, 1 = ML predicted data
         }
-        
+
         history.append(historical_entry)
-        
+
         # For the last row, append a copy with type 1
-        if i == len(rows) - 1:
+        if idx == len(rows) - 1:
             transition_entry = historical_entry.copy()
             transition_entry["type"] = 1
             history.append(transition_entry)
-
     history.sort(key=lambda item: item["date"])
 
     # Try ML prediction first, fall back to heuristic method
@@ -931,7 +986,14 @@ def _generate_report(geojson_payload: Union[str, Dict[str, Any]], yield_profile:
             forecast_dict["ndviStartConfidence"] = round(flowering_confidence, 2)
             forecast_dict["ndviStartMethod"] = ml_results.get('flowering_method')
 
-    return {"history": history, "forecast": forecast_dict}
+    anomalies: List[Dict[str, Any]] = []
+    try:
+        history_frame = pd.DataFrame(history) if history else pd.DataFrame()
+        anomalies, _ = detect_anomalies(history_frame, weather_df)
+    except Exception:
+        monitor.logger.exception("Anomaly detection failed during report generation")
+        anomalies = []
+    return {"history": history, "forecast": forecast_dict, "anomalies": anomalies}
 
 
 @app.post("/reports", status_code=202)
