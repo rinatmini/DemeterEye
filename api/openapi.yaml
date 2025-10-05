@@ -147,6 +147,29 @@ components:
           format: float
           nullable: true
 
+    Anomaly:
+      type: object
+      description: Anomaly signal computed from NDVI and optionally weather.
+      properties:
+        key:
+          type: string
+          description: Machine-readable key (e.g., ndvi_volatility)
+        title:
+          type: string
+          description: Human-readable title
+        triggered:
+          type: boolean
+        severity:
+          type: string
+          description: info | warning | error
+        detectedAt:
+          type: string
+          format: date-time
+          nullable: true
+        details:
+          type: object
+          additionalProperties: true
+
     Field:
       type: object
       properties:
@@ -173,6 +196,10 @@ components:
             $ref: '#/components/schemas/ReportDaily'
         forecast:
           $ref: '#/components/schemas/ReportForecast'
+        anomalies:
+          type: array
+          items:
+            $ref: '#/components/schemas/Anomaly'
         errorMessage: { type: string }
 
     CreateFieldReq:
