@@ -266,28 +266,48 @@ export default function FieldDetails() {
                   <dd>{field.forecast.year}</dd>
                 </div>
                 <div className="flex justify-between py-1">
-                  <dt>Yield</dt>
-                  <dd>{field.forecast.yieldTph ?? "—"} t/ha</dd>
-                </div>
-                <div className="flex justify-between py-1">
-                  <dt>NDVI peak</dt>
+                  <dt>Blooming peak</dt>
                   <dd>{field.forecast.ndviPeak ?? "—"}</dd>
                 </div>
                 <div className="flex justify-between py-1">
-                  <dt>Peak at</dt>
+                  <dt>Blooming start at</dt>
+                  <dd>{field.forecast.ndviStartAt?.slice?.(0, 10) ?? "—"}</dd>
+                </div>
+                <div className="flex justify-between py-1">
+                  <dt>Blooming peak at</dt>
                   <dd>{field.forecast.ndviPeakAt?.slice?.(0, 10) ?? "—"}</dd>
                 </div>
                 <div className="flex justify-between py-1">
-                  <dt>Confidence</dt>
+                  <dt>Blooming end at</dt>
+                  <dd>{field.forecast.ndviEndAt?.slice?.(0, 10) ?? "—"}</dd>
+                </div>
+                <div className="flex justify-between py-1">
+                  <dt>Blooming confidence</dt>
                   <dd>
-                    {field.forecast.confidence != null
-                      ? Math.round(field.forecast.confidence * 100) + "%"
+                    {field.forecast.ndviConfidence != null
+                      ? Math.round(field.forecast.ndviConfidence * 100) + "%"
                       : "—"}
                   </dd>
                 </div>
                 <div className="flex justify-between py-1">
-                  <dt>Model</dt>
-                  <dd>{field.forecast.model ?? "—"}</dd>
+                  <dt>NDVI model</dt>
+                  <dd>{field.forecast.ndviModel ?? "—"}</dd>
+                </div>
+                <div className="flex justify-between py-1">
+                  <dt>Yield</dt>
+                  <dd>{field.forecast.yieldTph ?? "—"} t/ha</dd>
+                </div>
+                <div className="flex justify-between py-1">
+                  <dt>Confidence yield</dt>
+                  <dd>
+                    {field.forecast.yieldConfidence != null
+                      ? Math.round(field.forecast.yieldConfidence * 100) + "%"
+                      : "—"}
+                  </dd>
+                </div>
+                <div className="flex justify-between py-1">
+                  <dt>Yield model</dt>
+                  <dd>{field.forecast.yieldModel ?? "—"}</dd>
                 </div>
               </dl>
             ) : (

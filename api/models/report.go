@@ -29,6 +29,7 @@ type Report struct {
 // ReportDaily — one daily observation as written by the processor.
 type ReportDaily struct {
 	Date           time.Time `bson:"date"                   json:"date"` // RFC3339 stored as time in Go
+	Type           int       `bson:"type,omitempty" json:"type"`         // 0: actual, 1: forecast
 	NDVI           *float64  `bson:"ndvi,omitempty"         json:"ndvi,omitempty"`
 	CloudCover     *int      `bson:"cloud_cover,omitempty"  json:"cloud_cover,omitempty"` // HLS cloud mask (0..100?)
 	Collection     string    `bson:"collection,omitempty"   json:"collection,omitempty"`  // e.g., "HLSS30_2.0"
@@ -41,10 +42,14 @@ type ReportDaily struct {
 
 // ReportForecast — forecast section produced by the processor.
 type ReportForecast struct {
-	Year       int        `bson:"year"                 json:"year"`
-	YieldTph   *float64   `bson:"yieldTph,omitempty"   json:"yieldTph,omitempty"`
-	NDVIPeak   *float64   `bson:"ndviPeak,omitempty"   json:"ndviPeak,omitempty"`
-	NDVIPeakAt *time.Time `bson:"ndviPeakAt,omitempty" json:"ndviPeakAt,omitempty"`
-	Model      string     `bson:"model,omitempty"      json:"model,omitempty"`
-	Confidence *float64   `bson:"confidence,omitempty" json:"confidence,omitempty"`
+	Year            int        `bson:"year"                 json:"year"`
+	YieldTph        *float64   `bson:"yieldTph,omitempty"   json:"yieldTph,omitempty"`
+	YieldModel      string     `bson:"yieldModel,omitempty" json:"yieldModel,omitempty"`
+	YieldConfidence *float64   `bson:"yieldConfidence,omitempty" json:"yieldConfidence,omitempty"`
+	NDVIPeak        *float64   `bson:"ndviPeak,omitempty"   json:"ndviPeak,omitempty"`
+	NDVIPeakAt      *time.Time `bson:"ndviPeakAt,omitempty" json:"ndviPeakAt,omitempty"`
+	NDVIStartAt     *time.Time `bson:"ndviStartAt,omitempty" json:"ndviStartAt,omitempty"`
+	NDVIEndAt       *time.Time `bson:"ndviEndAt,omitempty" json:"ndviEndAt,omitempty"`
+	NDVIModel       string     `bson:"ndviModel,omitempty"      json:"ndviModel,omitempty"`
+	NDVIConfidence  *float64   `bson:"ndviConfidence,omitempty" json:"ndviConfidence,omitempty"`
 }
