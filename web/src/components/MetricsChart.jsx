@@ -35,14 +35,6 @@ export default function MetricsChart({ history = [] }) {
   }, [base]);
 
   const [year, setYear] = useState("All");
-  useEffect(() => {
-    if (!years || years.length === 0) return;
-    const currentYear = new Date().getFullYear();
-    setYear((prev) => {
-      if (prev !== "All") return prev;
-      return years.includes(currentYear) ? currentYear : years[0];
-    });
-  }, [years]);
   const dataByYear = useMemo(
     () =>
       year === "All" ? base : base.filter((d) => getYear(d.date) === year),
@@ -81,10 +73,10 @@ export default function MetricsChart({ history = [] }) {
   const [show, setShow] = useState({
     ndvi: true,
     temperature_deg_c: true,
-    wind_speed_mps: true,
-    cloudcover_pct: true,
-    clarity_pct: true,
-    humidity_pct: true,
+    wind_speed_mps: false,
+    cloudcover_pct: false,
+    clarity_pct: false,
+    humidity_pct: false,
   });
 
   const yLeftLabel = show.ndvi ? "NDVI" : "";
