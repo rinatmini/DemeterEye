@@ -28,7 +28,7 @@ function Shell({ children }) {
       <header className="sticky top-0 z-10 bg-white border-b">
         <div className="mx-auto max-w-6xl px-4 h-14 flex items-center justify-between">
           <Link to="/" className="inline-flex items-center gap-2 font-semibold">
-            <img src="/public/favicon.svg" className="h-16 w-16" />
+            <img src="/favicon.svg" className="h-16 w-16" />
             DemeterEye
           </Link>
           {token && (
