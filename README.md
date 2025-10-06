@@ -2,17 +2,16 @@
 
 <img src="media/main_logo.png" alt="" width="75"/> <img src="media/space-challenge-bg.png" alt="" width="200"/>
 
-🌐 **Live App:** [https://demetereye-web-1060536779509.us-central1.run.app/](https://demetereye-web-1060536779509.us-central1.run.app/)
+🌍 **Live App:** [https://demetereye-web-1060536779509.us-central1.run.app/](https://demetereye-web-1060536779509.us-central1.run.app/)
 
-> 🚀 Developed as part of [**NASA’s International Space Apps Challenge 2025**](https://www.spaceappschallenge.org/2025/) — a global hackathon empowering teams to solve real-world problems using NASA’s open data and satellite imagery.
+> 🚀 Developed as part of [**NASA's International Space Apps Challenge 2025**](https://www.spaceappschallenge.org/2025/) – a global hackathon empowering teams to solve real-world problems using NASA's open data and satellite imagery.
 
-DemeterEye is an end-to-end field intelligence platform that combines NASA Harmonized Landsat Sentinel (HLS) imagery, agronomic models, and farmer-supplied data to surface vegetation trends, anomalies, and yield projections. This repository brings together the cloud-native API, the geospatial processing service, and the map-driven web dashboard that make up the DemeterEye experience.
+DemeterEye is an end-to-end field intelligence platform that combines NASA Harmonized Landsat Sentinel (HLS) imagery, agronomic models, and farmer-supplied data to surface vegetation trends, anomalies, and yield projections. This repository brings together the cloud-native API, the geospatial processing service, the map-driven web dashboard, and the iOS mobile application that make up the DemeterEye experience.
 
 ## UI Demo
 
 ![UI Demo 1](./media/ui_demo1.gif)
 ![UI Demo 2](./media/ui_demo2.gif)
-
 
 ## Highlights
 
@@ -20,6 +19,7 @@ DemeterEye is an end-to-end field intelligence platform that combines NASA Harmo
 - Chipnik Monitor service ingests HLS tiles, detects anomalies, and publishes daily/forecast time series
 - Go REST API provides authenticated access to fields, reports, and operations backed by MongoDB
 - React + Leaflet web app for drawing fields, reviewing NDVI/EVI histories, and requesting new analyses
+- Native iOS app for mobile field monitoring with seasonal summaries and anomaly notifications
 - Dockerfiles and GitHub Actions for deploying each component to Google Cloud Run
 
 ## Repository Layout
@@ -27,6 +27,7 @@ DemeterEye is an end-to-end field intelligence platform that combines NASA Harmo
 - `api/` - Go 1.24 service that fronts MongoDB, wraps JWT auth, and brokers report generation requests
 - `chipnik_monitor/` - Python 3.10+ analytics stack with FastAPI endpoints, Streamlit dashboard, and Prophet forecasting
 - `web/` - React client with Leaflet tooling for field management and report visualisation
+- `ios/` - Native iOS application for mobile field monitoring with seasonal tracking and notifications
 - `media/` - Shared branding assets referenced by documentation and the web client
 - `.github/workflows/` - CI/CD pipelines for deploying the API, web client, and on-premise monitor images
 
@@ -38,6 +39,7 @@ DemeterEye is an end-to-end field intelligence platform that combines NASA Harmo
 - MongoDB instance (local or cloud)
 - NASA Earthdata credentials with access to HLS collections
 - Google Cloud SDK (optional, for Cloud Run deployments)
+- Xcode 26 (for iOS development)
 
 ## Quick Start (Local Development)
 
@@ -72,6 +74,12 @@ DemeterEye is an end-to-end field intelligence platform that combines NASA Harmo
    VITE_API_BASE="http://127.0.0.1:8080" npm run dev
    ```
    Visit `http://127.0.0.1:5173` to draw fields, request reports, and visualise Chipnik outputs.
+5. **Build the iOS app** (optional)
+   ```bash
+   cd ios
+   open DemeterEye.xcodeproj
+   ```
+   Configure the API endpoint in the app settings and build to a simulator or device through Xcode.
 
 ## Environment Variables
 
@@ -112,6 +120,16 @@ DemeterEye is an end-to-end field intelligence platform that combines NASA Harmo
 - Processor docs: `chipnik_monitor/README.md`
 - API reference & OpenAPI spec: `api/openapi.yaml`
 - Front-end notes and deployment snippet: `web/README.md`
+- iOS app documentation: `ios/README.md`
+
+## iOS App Features
+
+The mobile application helps farmers monitor field health using NASA Earth observation data:
+- Login and management of multiple fields
+- Map view with field boundaries
+- Track field greenness and seasonal growth history
+- Seasonal summaries with start, and peak of season dates
+- Summaries and predictions for crop flowering
 
 Contributions and feedback are welcome. Please open an issue or discussion if you plan to add new data sources, crop profiles, or deployment targets.
 
