@@ -4,9 +4,15 @@
 
 🌐 **Live App:** [https://demetereye-web-1060536779509.us-central1.run.app/](https://demetereye-web-1060536779509.us-central1.run.app/)
 
-> 🚀 Developed as part of **NASA’s International Space Apps Challenge 2025** — a global hackathon empowering teams to solve real-world problems using NASA’s open data and satellite imagery.
+> 🚀 Developed as part of [**NASA’s International Space Apps Challenge 2025**](https://www.spaceappschallenge.org/2025/) — a global hackathon empowering teams to solve real-world problems using NASA’s open data and satellite imagery.
 
 DemeterEye is an end-to-end field intelligence platform that combines NASA Harmonized Landsat Sentinel (HLS) imagery, agronomic models, and farmer-supplied data to surface vegetation trends, anomalies, and yield projections. This repository brings together the cloud-native API, the geospatial processing service, and the map-driven web dashboard that make up the DemeterEye experience.
+
+## UI Demo
+
+![UI Demo 1](./media/ui_demo1.gif)
+![UI Demo 2](./media/ui_demo2.gif)
+
 
 ## Highlights
 
