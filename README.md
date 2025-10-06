@@ -8,10 +8,14 @@
 
 DemeterEye is an end-to-end field intelligence platform that combines NASA Harmonized Landsat Sentinel (HLS) imagery, agronomic models, and farmer-supplied data to surface vegetation trends, anomalies, and yield projections. This repository brings together the cloud-native API, the geospatial processing service, the map-driven web dashboard, and the iOS mobile application that make up the DemeterEye experience.
 
-## UI Demo
+## Web UI Demo
 
 ![UI Demo 1](./media/ui_demo1.gif)
 ![UI Demo 2](./media/ui_demo2.gif)
+
+## iOS UI Demo
+![UI Demo 3](./media/ui_demo3.gif)
+
 
 ## Highlights
 
